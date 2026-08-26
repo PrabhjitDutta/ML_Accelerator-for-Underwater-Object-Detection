@@ -1,0 +1,525 @@
+// yolo26_hls.cpp - stage 1 of the synthesizable trunk datapath: integer accumulator.
+//
+// Mirrors yolo26_utils.h's conv2d() SmoothQuant (asymmetric uint8) path exactly, with two changes:
+//   * the two accumulators become ap_int<32> instead of double
+//   * no STL / heap / throw; static-bounded local arrays only
+//
+// Everything else - loop order, tap ranges, the zero-point weight-sum, the dequant expression and
+// its exact float/double promotions - is preserved verbatim, because the validation gate is EXACT
+// float equality against conv2d(). Any deviation shows up as a mismatch rather than as "close
+// enough", which is the entire point of staging the ap_fixed dequant separately.
+//
+// Why integer accumulation is safe to reorder (and float accumulation is not): these are int8/uint8
+// CODES, so every partial sum is an exact integer and the reduction is associative. That is what
+// licenses the MAC-lane parallelism in design target 1. Do NOT extend the same reasoning to the
+// dequant path.
+#include "yolo26_hls.h"
+#include <cmath>
+
+// ---------------------------------------------------------------------------------------------
+// Local copies of the two conv2d helpers. Deliberately duplicated rather than shared: yolo26_utils.h
+// drags in <vector>/<string>/weights_loader.h, none of which may cross into a synthesizable TU.
+// These are byte-for-byte the same arithmetic.
+// ---------------------------------------------------------------------------------------------
+
+// Output-column range [o0,o1) over which tap column `base` lands inside the image. Expressing the
+// zero padding as a loop bound instead of a per-element predicate keeps the branch out of the
+// datapath - it is also what makes the innermost loop a clean II=1 candidate.
+static inline void y26_ow_range(int base, int sw, int W, int OW, int& o0, int& o1) {
+    o0 = base >= 0 ? 0 : (-base + sw - 1) / sw;
+    o1 = W - 1 - base;
+    o1 = o1 < 0 ? 0 : o1 / sw + 1;
+    if (o1 > OW) o1 = OW;
+}
+
+// SiLU in double, rounded to float - identical to yolo26_utils.h's silu(), which is the closest
+// portable match to torch's float32 SiLU.
+// NOTE for synthesis: std::exp on double is legal in HLS but expensive. Replacing this with a
+// fixed-point LUT is a stage-2/3 decision and MUST be gated on mAP delta, not on the bit-exact gate.
+static inline float y26_silu(float v) { double d = v; return (float)(d / (1.0 + std::exp(-d))); }
+
+#ifdef Y26_SILU_LUT
+#include "yolo26_silu_lut.h"
+// Fixed-point SiLU by table lookup + linear interpolation. Added 2026-08-17.
+//
+// What it replaces: `std::exp` on double, which csynth turned into a dexp core (39 cycles) feeding a
+// ddiv core (59 cycles), plus the dadd/dmul/sitodp/fptrunc conversion chain around them. That is the
+// bulk of the dequant loop's depth-181 pipeline, in a loop that executes once per OUTPUT PIXEL.
+//
+// Only reachable from the Y26_FX_DEQUANT branch, and deliberately so: the stage-1 build keeps the
+// float SiLU because its gate is EXACT equality against conv2d(). Letting the LUT into that path
+// would convert a bit-exact regression guard into a tolerance check, which is the one thing the
+// two-stage split exists to prevent.
+//
+// The table stores RAW fixed-point integers with Y26_SILU_FB == Y26_FX_I fractional bits, so an entry
+// drops straight into `.V` - no scaling multiply, no rounding, no conversion core.
+static inline y26_fx_t y26_silu_fx(y26_fx_t v) {
+    // Outside +/-16 the table is unnecessary: SiLU(x) - x and SiLU(-x) are both < 2e-6 there, which is
+    // ~40x smaller than the interpolation error inside the range. Clamping is exact enough AND it is
+    // what bounds the table index, so these two tests are load-bearing, not just an optimization.
+    if (v >= (y26_fx_t)Y26_SILU_HI) return v;
+    if (v <= (y26_fx_t)Y26_SILU_LO) return (y26_fx_t)0;
+
+    // Position in table units: (v - LO) * (N / (HI - LO)) = (v + 16) * 32, so the scale is a shift.
+    const ap_fixed<40,12> t = (ap_fixed<40,12>)((v - (y26_fx_t)Y26_SILU_LO) * (y26_fx_t)32);
+    const int             i = t.to_int();                       // t > 0, so truncation == floor
+    // Defensive clamp. The early returns above already guarantee 0 <= i <= N-1; this costs two
+    // comparators and turns any future edit to the range constants into a wrong ANSWER rather than an
+    // out-of-range ROM read.
+    const int ii = (i < 0) ? 0 : ((i > Y26_SILU_N - 1) ? (Y26_SILU_N - 1) : i);
+
+    const ap_ufixed<16,0> f = (ap_ufixed<16,0>)(t - (ap_fixed<40,12>)ii);
+    const ap_int<32>      a = Y26_SILU_TAB[ii];
+    const ap_int<32>      b = Y26_SILU_TAB[ii + 1];
+    const ap_int<33>      d = (ap_int<33>)b - (ap_int<33>)a;
+
+    // Bit-reinterpret rather than rescale. Assigning through `.V` is ambiguous (ap_private has ~15
+    // assignment overloads and ap_int<48> matches none of them uniquely); multiplying by 2^-24 would
+    // be unambiguous but would infer a 48x48 multiplier for what is a pure relabelling of bits.
+    // range(hi,lo) returns an assignable proxy and costs nothing.
+    const ap_int<49> raw = (ap_int<49>)a + (ap_int<49>)(d * f);
+    y26_fx_t out = (y26_fx_t)0;
+    out.range(Y26_FX_W - 1, 0) = (ap_uint<Y26_FX_W>)raw;
+    return out;
+}
+#endif
+
+void y26_conv2d_hls(const y26_act_t* X, int H, int W,
+                    const y26_wt_t*  Wt,
+                    const Y26ConvCfg& c,
+                    float* Y) {
+    const int OH   = y26_oh(H, c);
+    const int OW   = y26_ow(W, c);
+    const int icpg = c.ic / c.groups;      // input channels per group
+    const int ocpg = c.oc / c.groups;      // output channels per group
+    const int ktap = c.kh * c.kw;
+
+    // -----------------------------------------------------------------------------------------
+    // ACTIVATION STAGING - the fix for the 2026-08-06 II=16 finding.
+    //
+    // The MAC lanes cannot be fed through the single m_axi port on X; csynth serialized them to one
+    // read per cycle. So the input is copied ONCE per conv into a banked on-chip buffer, and the MAC
+    // loop reads that instead. This is design target 3's "hold activations whole in BRAM" made real.
+    //
+    // Staging whole rather than per-row is what makes the copy cheap. The copy is O(ic*H*W); the MACs
+    // are O(oc*OH*OW*icpg*kh*kw). Staging per (icl,kh) instead would have been catastrophic for 1x1
+    // convs - there the copy is O(W) against O(W/lanes) of MAC work, i.e. the copy would dominate by
+    // the lane count. Hoisting it out of the oc loop amortizes it over every output channel.
+    // -----------------------------------------------------------------------------------------
+    // Layout (see yolo26_hls.h): channel c -> bank c % Y26_LANES, offset (c/Y26_LANES)*H*W + y*W + x.
+    // `complete dim=1` makes the LANE axis a set of independent memories whose index is the literal
+    // loop variable after UNROLL - that, and not the mapping arithmetic, is what buys II=1.
+    static y26_act_t xbuf[Y26_LANES][Y26_ACT_LANE_ELEMS];
+    #pragma HLS ARRAY_PARTITION variable=xbuf complete dim=1
+
+    const ap_uint<19> hw = (ap_uint<19>)((ap_uint<11>)H * (ap_uint<11>)W);
+    // groups == 1 implies ic0 == 0 for every output channel, which is precisely the condition that
+    // makes bank(lane l) == l a COMPILE-TIME fact in the MAC pass below. It covers 88 of the model's
+    // 102 convs and essentially all of its MACs; the 14 grouped convs are depthwise (icpg == 1) and
+    // have no channel parallelism to extract regardless.
+    const bool g1 = (c.groups == 1);
+    for (int ic = 0; ic < c.ic; ++ic) {
+        const int         l    = ic & (Y26_LANES - 1);          // bank  (Y26_LANES is a power of 2)
+        const ap_uint<8>  cg   = (ap_uint<8>)(ic / Y26_LANES);  // channel-group within the bank
+        const y26_idx_t   dst0 = (y26_idx_t)(cg * hw);
+        const y26_idx_t   src0 = (y26_idx_t)((ap_uint<11>)ic * hw);
+        for (y26_idx_t j = 0; j < hw; ++j) {
+            #pragma HLS PIPELINE II=1
+            xbuf[l][dst0 + j] = X[src0 + j];
+        }
+    }
+
+    // ---- ON-CHIP WEIGHT STAGING (design target 2, landed 2026-08-18) ----
+    //
+    // One OUTPUT CHANNEL's weights, staged in BRAM. Sized by Y26_MAX_DEPTH, which is already defined
+    // as max (ic/groups)*kh*kw = 2304 - i.e. exactly the per-oc weight count. 2.25 KB, ~1 BRAM36,
+    // against the ~387 tiles measured free in notes/yolo26s-zu9eg-measurements.md 3c.
+    //
+    // WHY PER-OUTPUT-CHANNEL and not per-conv: the `oc` loop is the OUTERMOST loop, and output
+    // channel oc's weights occupy the CONTIGUOUS slice [oc*icpg*ktap, (oc+1)*icpg*ktap). Staging a
+    // whole conv would need up to oc*icpg*ktap bytes (megabytes, and unbounded by any existing
+    // constant); staging one output channel needs 2304 and removes exactly the same redundancy,
+    // because the re-fetching was across `oh`, which is INSIDE `oc`.
+    //
+    // WHAT IT FIXES (the staging copy below is the only DRAM read of Wt in the MAC path now):
+    //   1. OH-FOLD REDUNDANT TRAFFIC. The hoist used to sit inside the `oh` loop, so every weight was
+    //      re-fetched once per output row: oc*OH*icpg*ktap reads of an oc*icpg*ktap tensor. Now each
+    //      weight is read EXACTLY ONCE per conv. At production spatial that is an 80-160x cut.
+    //   2. BURST INFERENCE. csynth reported `214-230 Stride is incompatible` on both Wt reads,
+    //      because consecutive lanes step the address by `ktap`, not 1 - so HLS refused to burst and
+    //      every access was a single-beat 8-bit transaction on a 128-bit-capable port. The copy
+    //      below is a STRIDE-1 linear scan, which is the pattern that does burst.
+    //   3. DRAM LATENCY IMMUNITY in the inner loop, which now reads BRAM, not m_axi.
+    //
+    // HONEST SCOPE - what it does NOT fix: the per-(icb,tap) hoist still runs once per output row,
+    // so the total number of weight fetches into `wl` is unchanged; staging changes where they come
+    // FROM, not how many there are. Removing them needs the `oh` loop moved INSIDE the tap loops
+    // (weight-stationary), which needs an OH x OW accumulator plane instead of accrow[OW]. That is a
+    // separate change - see the note. Do not attribute the OH-fold cycle win to this commit.
+    //
+    // ---- BANKED BY LANE, and that is NOT cosmetic - MEASURED 2026-08-18 ----
+    //
+    // The first version of this was a FLAT `wbuf[Y26_MAX_DEPTH]` read by a sequential hoist loop.
+    // It cost 857,272 cycles against the 457,004 baseline: +87.6%, a REGRESSION. csynth did not
+    // predict it - with trip counts pinned to the cosim conv, the same static model that reproduces
+    // the flat-Wt baseline to 0.4% (459k predicted / 457,004 measured) predicted 404k for the flat
+    // staged version. The missing ~453,000 cycles were runtime stall on a single-ported BRAM shared
+    // between the staging writer and the hoist reader: ~3.5 cycles per read, invisible to a schedule
+    // that reports II=1. Do not trust an II=1 report to mean a memory is actually keeping up.
+    //
+    // Banking by lane is the same trick `xbuf` already uses, and for the same reason: channel c goes
+    // to bank c % Y26_LANES, the `icb` tile step is exactly Y26_LANES, so lane l ALWAYS reads bank l
+    // - a literal index once UNROLL has run, provably conflict-free. Two consequences:
+    //   * no arbitration, so the stall above disappears;
+    //   * the hoist collapses from Y26_LANES SEQUENTIAL reads to ONE parallel read, which is what
+    //     finally makes lanes close to free on the weight side rather than ~1.6 cycles each.
+    //
+    // BANK DEPTH: a bank holds ceil(icpg/Y26_LANES) rows of ktap taps. Bounded by
+    // Y26_MAX_DEPTH/Y26_LANES rounded up, plus one extra row (Y26_MAX_K^2) for the partial final
+    // tile. Small enough that each bank is LUTRAM/registers rather than a BRAM, which is exactly
+    // what we want - a BRAM per lane would not fit at high lane counts.
+    static y26_wt_t wbuf[Y26_LANES][Y26_WBANK];
+    #pragma HLS ARRAY_PARTITION variable=wbuf complete dim=1
+
+    // Zero-point weight sums for the CURRENT output channel. Sum over the icl axis of the int8
+    // weight codes, per tap. The icl axis contributes identically at every output position, so it is
+    // pre-summed once per (oc, tap); the per-row pass below then costs kh*kw range-adds instead of
+    // icpg*kh*kw. Exact in int32: |sum| <= 127 * 2304 = 292,608.
+    //
+    // MOVED INSIDE THE `oc` LOOP 2026-08-18. It used to be a whole-tensor precompute into
+    // kwsum[Y26_MAX_OC * K * K] (4,608 int32 = 18 KB) that made its own redundant pass over Wt from
+    // DRAM - the second `Stride is incompatible` site. Computing it per-oc from the staged wbuf
+    // removes that pass entirely and shrinks the array to ktap entries. The summation ORDER over
+    // icl is unchanged (ascending), so the values are identical and the bit-exact gate still holds.
+    ap_int<32> kwsum_o[Y26_MAX_K * Y26_MAX_K];
+
+    // Per-output-row accumulators, one per OUTPUT COLUMN. The loop interchange that produced them is
+    // still load-bearing (it is what keeps the reduction out of a loop-carried dependency), but the
+    // PARALLELISM no longer comes from this axis - see the banking note in yolo26_hls.h. As of
+    // 2026-08-17 the lanes run along the INPUT CHANNEL axis, so the MAC loop touches exactly one
+    // accrow[ow] per cycle.
+    //
+    // Consequently accrow is NOT partitioned any more. Partitioning it would now cost a 16-way
+    // mux/demux on a runtime `ow` index while delivering nothing, since only one access per cycle is
+    // issued.
+    //
+    // accwrow IS NO LONGER PARTITIONED EITHER - corrected 2026-08-17. This comment used to read
+    // "accwrow IS still partitioned, because the zero-point pass below stays lane-tiled over output
+    // columns (it reads no activations, so it was always at II=1 and needs no restructuring)". The
+    // II claim was true and the conclusion was WRONG: `cyclic factor=Y26_LANES` on an index whose
+    // tile base `o0` is a RUNTIME value is the exact same runtime-rotation crossbar that gave the MAC
+    // loop II=8 - it just paid in AREA instead of initiation interval, so it stayed invisible.
+    //
+    // Measured before the fix (csynth, XCZU9EG): the zero-point pass Outline_VITIS_LOOP_193_11 cost
+    // 8,293 LUT at 16 lanes and 26,581 at 32 - 3.2x LUT and 4.5x FF for 2x lanes, i.e. O(LANES^2),
+    // growing from 43% to 67% of kernel LUT. The MAC pass next door scaled 1.3x. It also owned the
+    // 32-lane critical path (Pipeline_VITIS_LOOP_200_13 -> accwrow_6_U). See
+    // notes/yolo26s-zu9eg-measurements.md.
+    //
+    // The pass adds a CONSTANT `ws` across a contiguous [o0,o1), so it does not need lane
+    // parallelism at all - sequential at II=1 needs no partition and builds no crossbar. Do not
+    // "restore" the tiling to make this loop look faster; the area it costs is superlinear and the
+    // cycles it saves are trivial (see the cost note at the loop itself).
+    //
+    // The old comment here warned against "simplifying back to a scalar accumulator". That warning
+    // still applies to a SCALAR: it would serialize the reduction into a dependency chain. It does
+    // NOT apply to the per-lane psum + single adder tree used below, which has no carried dependency
+    // because the tree is combinational within one pipeline stage. Do not conflate the two.
+    ap_int<32> accrow [Y26_MAX_OW];
+    ap_int<32> accwrow[Y26_MAX_OW];
+
+    for (int oc = 0; oc < c.oc; ++oc) {
+        const int g   = oc / ocpg;
+        const int ic0 = g * icpg;
+        // perch is depthwise-only, so this conv's single accumulated input channel is ic0 == oc and
+        // one (step, lo) pair governs the whole dequant for this output channel.
+        const float step_o = c.perch ? c.step_v[ic0] : c.step;
+        const float lo_o   = c.perch ? c.lo_v[ic0]   : c.lo;
+        const float wsc_o  = c.wsc[oc];
+        const float bs     = c.bias ? c.bias[oc] : 0.f;
+
+        // --- stage this output channel's weights into BRAM (see the wbuf note above) ---
+        // STRIDE-1 by construction: output channel oc owns the contiguous slice
+        // [oc*icpg*ktap, +icpg*ktap) of Wt, so this is the linear scan HLS can turn into AXI bursts.
+        // The MAC hoist's `(icb+l)*ktap + tap` pattern is the SAME data in a strided order - staging
+        // it here is what converts that strided DRAM access into a strided BRAM access.
+        const y26_idx_t wbase = (y26_idx_t)((y26_out_t)oc * icpg) * (ap_uint<5>)ktap;
+        const int       wlen  = icpg * ktap;
+        // ONE FLAT loop, and it has to stay flat. The natural nesting (`for icl { for t }`) re-enters
+        // a ktap-deep pipeline icpg times, and with latency=30 on gmem_wt each re-entry pays the
+        // fill: at ktap=1 that is icpg*(1+30) per output channel instead of icpg. Walking `i`
+        // linearly and carrying icl/t/bank as counters keeps the Wt read STRIDE-1 (so it bursts -
+        // confirmed by `[HLS 214-115] burst read ... inferred on bundle 'gmem_wt'`, where the flat
+        // pre-staging code reported `214-230 Stride is incompatible`) while still scattering into
+        // the lane banks. The counter updates are increments and power-of-two ops, so II=1 holds.
+        int wicl = 0, wt = 0, wbl = 0, wbr = 0;
+        for (int i = 0; i < wlen; ++i) {
+            #pragma HLS PIPELINE II=1
+            #pragma HLS LOOP_TRIPCOUNT min=32 max=Y26_MAX_DEPTH avg=1152
+            wbuf[wbl][wbr + wt] = Wt[wbase + (y26_idx_t)i];
+            if (++wt == ktap) {
+                wt = 0;
+                ++wicl;
+                wbl = wicl % Y26_LANES;              // bank  = channel % lanes  (mask, power of two)
+                wbr = (wicl / Y26_LANES) * ktap;     // row   = channel / lanes  (shift)
+            }
+        }
+
+        // Per-tap zero-point sums for this output channel, from the staged banks.
+        //
+        // Lane-parallel with a combinational adder tree, mirroring the MAC below - NOT a scalar walk
+        // over `icl`. A scalar walk would index wbuf[icl % Y26_LANES][...] with a RUNTIME bank, which
+        // builds the Y26_LANES:1 read crossbar that the zero-point pass was restructured to retire
+        // (see the accwrow note further down). This form reads bank l at lane l, statically.
+        //
+        // BIT-EXACTNESS: the tree reassociates the sum over input channels. Exact for integers -
+        // same argument as the MAC's adder tree, and the reason these accumulators are ap_int and
+        // not float. The stage-1 gate is an EXACT-equality gate and covers this.
+        const int nrows = (icpg + Y26_LANES - 1) / Y26_LANES;
+        for (int t = 0; t < ktap; ++t) {
+            #pragma HLS LOOP_TRIPCOUNT min=1 max=Y26_MAX_K*Y26_MAX_K avg=1
+            ap_int<32> s = 0;
+            for (int r = 0; r < nrows; ++r) {
+                #pragma HLS PIPELINE II=1
+                #pragma HLS LOOP_TRIPCOUNT min=1 max=Y26_MAX_IC avg=4
+                ap_int<32> p = 0;
+                for (int l = 0; l < Y26_LANES; ++l) {
+                    #pragma HLS UNROLL
+                    // Dead lanes of the partial final tile contribute 0, not a stale bank value.
+                    p += (r * Y26_LANES + l < icpg) ? (ap_int<32>)wbuf[l][r * ktap + t]
+                                                    : (ap_int<32>)0;
+                }
+                s += p;
+            }
+            kwsum_o[t] = s;
+        }
+
+        for (int oh = 0; oh < OH; ++oh) {
+            const int ih0 = oh * c.sh - c.ph;
+            // accrow is unpartitioned now, so zero it sequentially - O(OW) once per output row is
+            // negligible against the MAC pass's O(icpg*kh*kw*OW) and keeps the array single-ported.
+            for (int ow = 0; ow < OW; ++ow) {
+                #pragma HLS PIPELINE II=1
+                accrow[ow] = 0;
+            }
+            // accwrow is zeroed sequentially too, matching the un-tiled zero-point pass below.
+            for (int ow = 0; ow < OW; ++ow) {
+                #pragma HLS PIPELINE II=1
+                accwrow[ow] = 0;
+            }
+
+            // --- zero-point pass: once per tap, not per MAC ---
+            for (int kh = 0; kh < c.kh; ++kh) {
+                const int ih = ih0 + kh;
+                if (ih < 0 || ih >= H) continue;          // whole row is padding
+                for (int kw = 0; kw < c.kw; ++kw) {
+                    const ap_int<32> ws = kwsum_o[kh * c.kw + kw];
+                    int o0, o1;
+                    y26_ow_range(kw - c.pw, c.sw, W, OW, o0, o1);
+                    // SEQUENTIAL, deliberately - do not lane-tile this (see the accwrow note above).
+                    // COST: this pass goes from ktap*OW/Y26_LANES to ktap*OW cycles per output row.
+                    // At production scale (OW=160, ktap=9, icpg=256) that is ~1,440 cycles against a
+                    // MAC pass of ~23,040 - about +6% cycles, to remove ~60% of the kernel's LUT and
+                    // the O(LANES^2) term that caps lane scaling. The pass runs once per TAP, not per
+                    // MAC, which is what makes it affordable to leave un-parallelised.
+                    for (int o = o0; o < o1; ++o) {
+                        #pragma HLS PIPELINE II=1
+                        accwrow[o] += ws;
+                    }
+                }
+            }
+
+            // --- MAC pass: lanes run along the INPUT CHANNEL axis (restructured 2026-08-17) ---
+            //
+            // Order is (icb, kh, kw) outside, output column `ow` innermost and SEQUENTIAL. Each cycle
+            // the Y26_LANES lanes read Y26_LANES different input channels at the SAME spatial
+            // position, multiply by their own weights, and a combinational adder tree folds the
+            // products into one accrow[ow].
+            //
+            // Why this schedules at II=1 where the column-parallel form stalled at 8: channel c lives
+            // in bank c % Y26_LANES, the tile step is exactly Y26_LANES, and ic0 == 0 whenever
+            // groups == 1 - so lane l always reads bank l, a literal index once UNROLL has run. HLS
+            // can prove non-conflict, which retires the 17-bank crossbar and its 34 address muxes.
+            // A second benefit falls out: all lanes share ONE within-bank offset, because they differ
+            // only by bank, so there is a single address computation instead of Y26_LANES of them.
+            //
+            // BIT-EXACTNESS: the adder tree reassociates the sum over input channels. That is exact
+            // for integers - the reason the accumulator is ap_int and not float, per the header note -
+            // so the stage-1 gate stays an EXACT-equality gate and applies here unchanged. Do NOT
+            // extend this reasoning to the dequant below, which is order-sensitive.
+            for (int icb = 0; icb < icpg; icb += Y26_LANES) {
+                for (int kh = 0; kh < c.kh; ++kh) {
+                    const int ih = ih0 + kh;
+                    if (ih < 0 || ih >= H) continue;
+                    const y26_idx_t rowoff = (y26_idx_t)((ap_uint<11>)ih * (ap_uint<11>)W);
+                    for (int kw = 0; kw < c.kw; ++kw) {
+                        const int base = kw - c.pw;
+                        int o0, o1;
+                        y26_ow_range(base, c.sw, W, OW, o0, o1);
+
+                        // Per-lane weights for this (channel group, tap), hoisted into registers so
+                        // the inner loop reads no memory except xbuf. Lanes past icpg are zero-filled,
+                        // so a partial final tile contributes nothing without needing a predicate
+                        // inside the MAC itself.
+                        //
+                        // NOTE: this reads BRAM (wbuf), not m_axi - staging landed 2026-08-18, see the
+                        // wbuf note at the top of the function. It used to be Y26_LANES unbursted
+                        // scalar AXI reads at ~6 cycles each (MEASURED ~98 cycles per (icb, tap) tile
+                        // at 16 lanes), which is what made the kernel DRAM-latency sensitive: +75.6%
+                        // cycles at 20-cycle read latency before `latency=30` closed it.
+                        //
+                        // STILL TRUE AFTER STAGING: this hoist runs once per OUTPUT ROW, because it
+                        // sits inside the `oh` loop. Staging removed the redundant DRAM TRAFFIC (each
+                        // weight is now fetched once per conv, not OH times) but not these ITERATIONS
+                        // - roughly 1.6 cycles per lane per (icb, tap) tile, which is the dominant
+                        // term in the lane-invariant floor A of the L(n) = A + B/n fit. Removing them
+                        // needs the `oh` loop moved INSIDE the tap loops so each staged weight is used
+                        // for every output row before being replaced (weight-stationary). That costs
+                        // an OH x OW accumulator plane in place of accrow[OW] (~102 KB, ~23 BRAM36 at
+                        // 160x160, affordable given BRAM sits flat at 1,049/1,824 through 512 lanes).
+                        // Do not attribute that cycle win to staging - they are separate changes.
+                        // WIDTH: keep these at the NATIVE int8 weight width (y26_wt_t == ap_int<8>).
+                        // They were ap_int<32> until 2026-08-17, which made the MAC below a 32x32
+                        // multiply for what is arithmetically int8 x uint8 - so the multipliers were
+                        // built in FABRIC instead of DSP48E2, and LUT scaled at ~1,300 per lane
+                        // (21,145 at 16 lanes -> 42,148 at 32) while 2,418 of 2,520 DSPs sat idle.
+                        // The values provably fit: Wt is int8 by construction. Do not widen these
+                        // back "for safety" - widen the ACCUMULATOR (`s`), which is already 32-bit.
+                        //
+                        // NO LOOP. Since wbuf is banked by lane and the tile step is exactly
+                        // Y26_LANES, lane l reads bank l at a single shared offset - so the whole
+                        // tile's weights land in ONE cycle, fully unrolled, instead of Y26_LANES
+                        // sequential reads. This is the payoff of the banking, and it is why the
+                        // hoist no longer appears in the cost model at all.
+                        //
+                        // HISTORY, because two earlier shapes here were both wrong in ways that
+                        // measured plausibly:
+                        //   * `for l < Y26_LANES` with a PREDICATED LOAD suppressed the read but not
+                        //     the ITERATION, so a partial final tile cost one cycle per dead lane.
+                        //     MEASURED (icpg=128, 8x8): 128 lanes = 387,244 cycles, 256 lanes =
+                        //     518,316 - WORSE than 64 lanes (463,020). The gap is 131,072 = exactly
+                        //     1 cyc x 128 dead lanes x 1024 rows.
+                        //   * `for l < lmax` reading a FLAT wbuf fixed that, but serialised 64 reads
+                        //     through one BRAM port and stalled ~3.5 cycles each at runtime while
+                        //     still reporting II=1 (857,272 cycles vs a 457,004 baseline).
+                        // Both are retired by the form below. Do not reintroduce a loop here.
+                        //
+                        // Why over-provisioning is now free: icpg ranges 32..512 across this model,
+                        // and dead lanes are masked to 0 combinationally rather than costing a
+                        // cycle each, so one large Y26_LANES can serve every layer.
+                        y26_wt_t wl[Y26_LANES];
+                        #pragma HLS ARRAY_PARTITION variable=wl complete
+
+                        // Dead lanes read 0, not a stale bank value. The mask is what lets the MAC
+                        // below stay unpredicated over all Y26_LANES (0*x = 0). Do NOT drop it and
+                        // write only [0,lmax) - wl would keep the previous tile's weights in the
+                        // dead lanes and the stage-1 bit-exact gate would fail.
+                        const int lrem = icpg - icb;
+                        const int lmax = (lrem < Y26_LANES) ? lrem : Y26_LANES;
+                        const int woff = (icb / Y26_LANES) * ktap + kh * c.kw + kw;
+                        for (int l = 0; l < Y26_LANES; ++l) {
+                            #pragma HLS UNROLL
+                            wl[l] = (l < lmax) ? wbuf[l][woff] : (y26_wt_t)0;
+                        }
+
+                        if (g1) {
+                            // groups == 1  =>  ic0 == 0  =>  bank(lane l) == l, statically provable.
+                            const y26_idx_t xrow =
+                                (y26_idx_t)((ap_uint<8>)(icb / Y26_LANES) * hw) + rowoff;
+                            for (int ow = o0; ow < o1; ++ow) {
+                                #pragma HLS PIPELINE II=1
+                                // Offset stays SIGNED until known non-negative: `base` is kw - pw and
+                                // can be negative; ow_range() is what guarantees ow*sw + base >= 0
+                                // over [o0,o1). Casting before that add would wrap.
+                                const y26_idx_t xo = xrow + (y26_idx_t)(ow * c.sw + base);
+                                ap_int<32> s = 0;
+                                for (int l = 0; l < Y26_LANES; ++l) {
+                                    #pragma HLS UNROLL
+                                    // The MULTIPLY stays at native width - ap_uint<8> * ap_int<8>,
+                                    // which ap_int types resolve to an exact ap_int<16> (extremes
+                                    // 255*-128 = -32,640 and 255*127 = 32,385 both fit). Only the
+                                    // ACCUMULATION is 32-bit. Casting the operands to ap_int<32>
+                                    // first - as this line used to - asks for a 32x32 multiplier and
+                                    // gets fabric instead of a DSP. Exactness is unchanged: the
+                                    // product is identical, so the stage-1 bit-exact gate still holds.
+                                    s += (ap_int<32>)(xbuf[l][xo] * wl[l]);
+                                }
+                                accrow[ow] += s;
+                            }
+                        } else {
+                            // Grouped. Every grouped conv in this model is depthwise (icpg == 1), so
+                            // this loop runs once and there is no channel parallelism to extract - a
+                            // property of the layer, not a scheduling failure. Written for general
+                            // icpg anyway so a future non-depthwise grouped conv stays CORRECT (it
+                            // would simply be slow). The bank is runtime here, but each iteration
+                            // issues a single read, so it costs one mux and no initiation interval.
+                            for (int l = 0; l < Y26_LANES; ++l) {
+                                const int icl = icb + l;
+                                if (icl < icpg) {
+                                    const int       ic   = ic0 + icl;
+                                    const int       bnk  = ic & (Y26_LANES - 1);
+                                    const y26_idx_t xrow =
+                                        (y26_idx_t)((ap_uint<8>)(ic / Y26_LANES) * hw) + rowoff;
+                                    for (int ow = o0; ow < o1; ++ow) {
+                                        #pragma HLS PIPELINE II=1
+                                        const y26_idx_t xo = xrow + (y26_idx_t)(ow * c.sw + base);
+                                        // Same native-width multiply as the g1 branch above.
+                                        accrow[ow] += (ap_int<32>)(xbuf[bnk][xo] * wl[l]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- dequant + activation (stage 1: still float, on purpose) ---
+            // real = wsc * (step * Sum(w_int*q) + lo * Sum_valid(w_int)) + bias.
+            // The VALID-tap weight sum is what makes padded borders contribute real 0.0 rather than
+            // `lo`; folding lo into a constant bias errs at borders and propagates.
+            // Promotions below are ordered to match conv2d() exactly: float*double -> double, the
+            // sum stays double, the wsc multiply stays double, then ONE cast to float, then += bias
+            // in float. Reordering these changes the result.
+            float* yr = &Y[(y26_idx_t)((y26_out_t)(oc * OH + oh) * (ap_uint<11>)OW)];
+            // Not lane-tiled: this loop is the DEQUANT, and it is the stage-2 target (-> ap_fixed).
+            // Parallelising it now would bake in a shape before its arithmetic type is settled, and its
+            // cost is O(OW) against the MAC loop's O(icpg*kh*kw*OW) - it is not the bottleneck.
+            for (int ow = 0; ow < OW; ++ow) {
+                #pragma HLS PIPELINE II=1
+#ifdef Y26_FX_DEQUANT
+                // STAGE 2: fixed-point scale arithmetic - the real hardware rounding.
+                // Deliberately NOT bit-exact; this is the step whose cost must be MEASURED (cosine +
+                // deviation now, mAP delta once the trunk exists), never assumed to be free.
+                // The accumulators stay INTEGER and are consumed by a multiply. Casting them into a
+                // value-width ap_fixed first is the bug that collapsed cosine to 0.064 - see the
+                // two-type rationale in yolo26_hls.h. `scale * ap_int` promotes to a wide fixed
+                // result, which is then narrowed once, at the assignment.
+                const y26_scale_t s_step = step_o;
+                const y26_scale_t s_lo   = lo_o;
+                const y26_scale_t s_wsc  = wsc_o;
+                const y26_fx_t t = (y26_fx_t)(s_step * accrow[ow])
+                                 + (y26_fx_t)(s_lo   * accwrow[ow]);
+                y26_fx_t v = (y26_fx_t)(s_wsc * t) + (y26_fx_t)bs;
+#ifdef Y26_SILU_LUT
+                // Fully fixed-point tail: no float/double core is instantiated for the activation.
+                if (c.act == 1) v = y26_silu_fx(v);
+                yr[ow] = v.to_float();
+#else
+                float vf = v.to_float();
+                if (c.act == 1) vf = y26_silu(vf);   // still double std::exp - see y26_silu_fx
+                yr[ow] = vf;
+#endif
+#else
+                // STAGE 1 (default): float dequant, so the kernel stays BIT-EXACT vs conv2d() and the
+                // exact-equality gate keeps guarding the integer accumulator. Promotion order below
+                // matches conv2d() exactly - float*double -> double, one cast to float, then += bias.
+                const double a  = (double)accrow[ow].to_int64();   // exact: accumulator is integral
+                const double aw = (double)accwrow[ow].to_int64();
+                float v = (float)(wsc_o * (step_o * a + lo_o * aw)) + bs;
+                if (c.act == 1) v = y26_silu(v);
+                yr[ow] = v;
+#endif
+            }
+        }
+    }
+}

@@ -1,0 +1,209 @@
+# C-synthesis + C-simulation of the per-conv top on the REAL ZCU102 part.
+#
+# ---------------------------------------------------------------------------------------------
+# SETUP - two commands, both required, NEITHER survives a reboot:
+#
+#   subst Y: "C:\Users\Prabhjit Dutta\Desktop\MTP\Project\UOD"
+#   cd C:\hls_y26 ; vitis-run --mode hls --tcl Y:/hls/csim/run_hls_zu9eg.tcl
+#
+# WHY A SUBST DRIVE AND NOT A JUNCTION. Every path this repo lives under contains a space
+# ("C:\Users\Prabhjit Dutta\..."). That is fatal to csim for a specific, non-obvious reason:
+# csim_design GENERATES A MAKEFILE (<sol>/csim/build/csim.mk) and does NOT quote source paths in it,
+# so make splits the path on the space and dies with
+#
+#   mingw32-make: *** No rule to make target 'obj/Prabhjit.o', needed by 'csim.exe'.
+#
+# C-SYNTHESIS is unaffected - it passes sources to clang directly, quoted - which is why csynth has
+# worked all along on the very same paths and this only surfaced when csim was first wired up
+# (2026-08-17). Do not conclude from a passing csynth that the paths are fine.
+#
+# A junction does NOT fix it: HLS canonicalises through junctions, so C:\hls_y26\src\x.cpp is
+# recorded as the space-containing target path and csim fails identically (observed: the tb was
+# silently un-findable, "ERROR: [HLS 200-627] Cannot find C test bench", despite add_files -tb).
+# A subst drive DOES fix it: Windows does not resolve subst back to the underlying path, so Y:\ is
+# what HLS records and what make sees. Verified by Resolve-Path returning Y:\... unchanged.
+#
+# Do NOT "fix" this by copying sources into C:\hls_y26. That was the previous arrangement and the
+# copies silently went stale the moment the gated originals were edited (verified 2026-08-17 - they
+# still had the old `long` index arithmetic after it had been replaced). Same failure class as the
+# stale tb_s1.exe recorded in notes/yolo26s-hls-next-steps.md.
+#
+# The PROJECT still lives at C:\hls_y26 (outside the repo) so build artefacts never land in the
+# tree; only the SOURCES are read through Y:.
+#
+# PATH: `vitis-run` is NOT on PATH in a fresh shell - it is added by settings64.bat. Either source
+# that first, or invoke it absolutely:
+#   & "C:\AMDDesignTools\2026.1\Vitis\bin\vitis-run.bat" --mode hls --tcl Y:/hls/csim/run_hls_zu9eg.tcl
+# Get this wrong under PowerShell and the failure is SILENT-ish: PowerShell raises
+# "The term 'vitis-run' is not recognized", but $LASTEXITCODE is left at its previous value (empty /
+# 0) because no native process ever ran, so a wrapper that checks $LASTEXITCODE reports SUCCESS for a
+# run that did not happen. Observed 2026-08-17. Check for the expected report files, not the exit
+# code. Same failure class as the `Select-Object -First N` trap in notes/yolo26s-hls-next-steps.md.
+#
+# LICENSE: XILINXD_LICENSE_FILE must be set IN THE CALLING PROCESS. It is set persistently at User
+# scope, but a shell started before that will not have it and csynth fails with
+# "[HLS 200-1023] Part 'xczu9eg-ffvb1156-2-e' ... does not have an appropriate license" - which
+# looks like a licensing problem and is actually a stale-environment problem. Setting it inside a
+# `cmd /c "... && ..."` chain does NOT take (notes/yolo26s-hls-next-steps.md:79); set $env: first.
+#   $env:XILINXD_LICENSE_FILE = "C:\XilinxLic\Xilinx_Enterprise.lic;C:\XilinxLic\Xilinx_Basic.lic"
+# ---------------------------------------------------------------------------------------------
+#
+# Part: xczu9eg-ffvb1156-2-e is the actual ZCU102 device, licensed under the Vivado ML Enterprise
+# evaluation installed 2026-08-17. That evaluation EXPIRES 2026-10-16 - after which this script
+# falls back to the ZU6EG proxy (xczu6eg-ffvb1156-2-e) under the permanent Basic license.
+# Utilization percentages here are against the real 2520 DSP / 912 BRAM36 budget and need no
+# hand-recomputation, unlike every report taken before this date.
+
+# Which dequant variant to synthesize. The two are NOT interchangeable and are gated differently:
+#   ""                 stage 1 - float dequant, BIT-EXACT vs conv2d(), guarded by tb_s1
+#   "-DY26_FX_DEQUANT" stage 2 - ap_fixed scale arithmetic, tolerance-gated by tb_s2
+#   + "-DY26_SILU_LUT" replaces std::exp(double) with a fixed-point sigmoid LUT (stage 2 only)
+# Selected by ENVIRONMENT VARIABLE, not by argv: vitis-run consumes its own command line and rejects
+# extra positional arguments ("option '--input_file' cannot be specified more than once").
+#   $env:Y26_FLAGS = "-DY26_FX_DEQUANT" ; $env:Y26_SOL = "sol_zu9eg_fx"
+set y26_flags ""
+set y26_sol   "sol_zu9eg"
+if {[info exists ::env(Y26_FLAGS)]} { set y26_flags $::env(Y26_FLAGS) }
+if {[info exists ::env(Y26_SOL)]}   { set y26_sol   $::env(Y26_SOL)   }
+puts "### synthesizing solution '$y26_sol' with flags '$y26_flags'"
+
+# Source root, on the subst drive. Overridable so the same script works from another machine or a
+# different drive letter, but it MUST stay space-free - see the header.
+set y26_src "Y:/hls/csim"
+set y26_wts "Y:/hls/weights_sq_compact_fold"
+if {[info exists ::env(Y26_SRC)]} { set y26_src $::env(Y26_SRC) }
+if {[info exists ::env(Y26_WTS)]} { set y26_wts $::env(Y26_WTS) }
+
+# Fail loudly and early rather than 20 minutes into a synthesis. Both failure modes here (subst not
+# run after a reboot, or a path with a space) produce confusing downstream errors.
+if {![file exists "$y26_src/yolo26_hls.cpp"]} {
+    puts "### ERROR: no sources at '$y26_src'. Run:  subst Y: \"<repo root>\""
+    exit 1
+}
+if {[string first " " "$y26_src$y26_wts"] >= 0} {
+    puts "### ERROR: source/weights path contains a space - csim's generated Makefile will break."
+    exit 1
+}
+
+# One PROJECT per variant, not one project with several solutions. Reusing a project without -reset
+# re-adds the sources and llvm-link fails ("symbol multiply defined"), while adding -reset would
+# delete the sibling solutions we want to compare against. Separate projects keep every variant's
+# report on disk simultaneously.
+open_project "prj_$y26_sol" -reset
+add_files $y26_src/yolo26_hls_top.cpp -cflags "-I$y26_src -std=c++14 $y26_flags"
+add_files $y26_src/yolo26_hls.cpp     -cflags "-I$y26_src -std=c++14 $y26_flags"
+
+# The testbench. NOT compiled with -fopenmp: the pragma is inert here (HLS csim builds one
+# translation unit per source with its own clang, and the loop it parallelises is host-side scoring,
+# not kernel work), and requesting it only risks a missing libgomp on the HLS toolchain.
+# It is the SAME yolo26_hls_tb.cpp the g++ gates use - deliberately, so csim cannot certify
+# something the gates never checked. It calls y26_conv_top(), which is what makes cosim possible.
+add_files -tb $y26_src/yolo26_hls_tb.cpp -cflags "-I$y26_src -std=c++14 $y26_flags"
+
+set_top y26_conv_top
+
+open_solution $y26_sol -reset -flow_target vivado
+set_part {xczu9eg-ffvb1156-2-e}
+create_clock -period 4 -name default
+
+# argv reaches the tb as a whitespace-split command line: <weights-dir> <spatial> [max-convs].
+# Spatial 16 matches what the g++ gates run, so a csim PASS here is directly comparable to them.
+#
+# max-convs is CAPPED AT 12 by default, and that is a considered choice rather than laziness.
+# csim is roughly 200x slower than the same code natively - not from -O0 (that is what -O below
+# fixes) but from the -fhls-csim instrumentation, which is not optional. Measured on the identical
+# 100-conv sweep at spatial 16: 3.4 s under native single-threaded `g++ -O2`, versus >700 s of CPU
+# under csim. It is compute-bound, not hung, and writes nothing large to disk.
+#
+# So the division of labour is: build_hls_tb.sh owns EXHAUSTIVE coverage (all 100 convs, seconds, and
+# the only place the stage-1 bit-exact bar is enforced); csim's narrower job is to prove the HLS clang
+# toolchain agrees with g++ on the same source, and to give cosim a stimulus. 12 convs does that.
+# For a full-coverage csim run, override: $env:Y26_TB_ARGV = "Y:/hls/weights_sq_compact_fold 16"
+set y26_tb_argv "$y26_wts 16 12"
+set y26_cosim   0
+if {[info exists ::env(Y26_TB_ARGV)]} { set y26_tb_argv $::env(Y26_TB_ARGV) }
+if {[info exists ::env(Y26_COSIM)]}   { set y26_cosim   $::env(Y26_COSIM)   }
+
+# -clean forces a rebuild. Without it csim reuses a previously built binary, which is the exact
+# stale-gate failure mode recorded for tb_s1.exe in notes/yolo26s-hls-next-steps.md.
+#
+# -O sets the optimizeCompile flag; without it csim builds "in debug mode" (-O0), which the log states
+# explicitly. Worth passing, but do NOT expect it to close the gap on its own: -O0 -> -O was measured
+# as the smaller of the two costs, and the -fhls-csim instrumentation (not optional, and what makes
+# cosim's argument tracing possible) dominates. That is why the conv count is capped above rather than
+# tuned here. -O changes only the HOST compile; the semantics under test are ap_int/ap_fixed and are
+# unaffected by host optimization level.
+csim_design -argv $y26_tb_argv -clean -O
+csynth_design
+
+# Co-simulation is OPT-IN ($env:Y26_COSIM = 1) because it runs the generated Verilog through a
+# simulator - slower again than csim by a wide margin. Drive it with an even smaller argv than the
+# csim default, e.g. $env:Y26_TB_ARGV = "Y:/hls/weights_sq_compact_fold 8 1" -> one conv at 8x8.
+#
+# DRAM SENSITIVITY. Cosim's AXI slave has ZERO memory latency by default - verified, not assumed:
+# sim/y26_conv_top_cosim_random_stall.json sets `{ delay == 0; }` on every channel including
+# `gmem_wt rd`, cosim_options.xml shows `random_stall` empty, and
+# sim/verilog/axivip/axi_slave_rdrv.sv:30 takes its only delay from that constraint. So there is no
+# controller latency, no refresh, no bank conflicts and no PS contention in ANY cosim number here.
+# The measured ~1.63 cycles per weight read is AXI HANDSHAKE ONLY.
+#
+# That matters for this kernel specifically: per notes/yolo26s-zu9eg-measurements.md 1b-CORRECTED,
+# the lane-invariant weight-fetch term is ~68% of the latency floor. $env:Y26_USER_STALL points at a
+# JSON file (same schema as the generated random_stall.json) that injects a read delay, turning a
+# point estimate into a measured sensitivity curve. Compute-bound cycles are unaffected by it -
+# those are exact already, being real RTL through xsim.
+set y26_user_stall ""
+if {[info exists ::env(Y26_USER_STALL)]} { set y26_user_stall $::env(Y26_USER_STALL) }
+if {$y26_cosim} {
+    if {$y26_user_stall ne ""} {
+        if {![file exists $y26_user_stall]} {
+            puts "### ERROR: Y26_USER_STALL='$y26_user_stall' does not exist"
+            exit 1
+        }
+        puts "### cosim with user_stall '$y26_user_stall'"
+        cosim_design -argv $y26_tb_argv -trace_level none -user_stall $y26_user_stall
+    } else {
+        cosim_design -argv $y26_tb_argv -trace_level none
+    }
+}
+
+# Vivado IMPLEMENTATION, opt-in ($env:Y26_IMPL = 1). This is the only way to get numbers that are
+# measurements rather than estimates, and it is the WINDOW-SENSITIVE step: on ZU9EG it is gone after
+# 2026-10-16 (the Basic license still covers Vivado_Implementation, but only up to ZU7EV).
+#
+# What each output settles, and why it is worth the runtime (all three CONFIRMED 2026-08-17, see
+# notes/yolo26s-zu9eg-measurements.md for the numbers):
+#   * post-route utilization - csynth is wrong in BOTH directions: it over-reported LUT by 62% (34,241
+#     est vs 21,140 real) and UNDER-reported BRAM by 22% (47% est vs 57.35% real). Never size the
+#     lane sweep off csynth BRAM.
+#   * post-route timing      - real Fmax WITH routing delay. The 2.920 ns csynth estimate was 39%
+#     optimistic (real: 4.064 ns, i.e. TIMING NOT MET) because HLS timing contains no routing at all.
+#   * report_power           - CORRECTED: export_design's impl flow DOES run report_power, emitting
+#     impl/verilog/report/y26_conv_top_power_routed.rpt. This comment previously said it does not.
+#     run_vivado_power.tcl is therefore only needed to RE-report with a SAIF (the default report is
+#     vectorless, confidence Medium).
+set y26_impl 0
+if {[info exists ::env(Y26_IMPL)]} { set y26_impl $::env(Y26_IMPL) }
+if {$y26_impl} {
+    # IMPLEMENTATION STRATEGY. The 2026-08-17 run used Vivado's `default` strategy with
+    # `phys_opt auto` and missed 4 ns by 64 ps: WNS -0.064 ns, 64 failing setup endpoints. The
+    # critical path (a DSP in the MAC pass driving an xbuf RAMB36E2 write-enable) was
+    # 3.643 ns = logic 1.056 (29%) + ROUTE 2.587 (71%) at only 5 logic levels - i.e. placement
+    # distance and congestion, NOT logic depth. That is precisely the class of violation post-route
+    # physical optimization exists to recover, so try it BEFORE editing the source: a retiming
+    # register in front of the BRAM WE is the fallback, and it costs a re-run of the bit-exact gates.
+    #
+    # `-vivado_phys_opt all` enables both post-place and post-route phys_opt (default `auto` leaves
+    # the post-route pass to the strategy's discretion). Both are overridable so a future run can go
+    # back to `default` for an apples-to-apples area comparison - the aggressive strategy can trade
+    # area for timing, so do NOT compare utilization across different strategies without saying so.
+    set y26_strategy "Performance_ExplorePostRoutePhysOpt"
+    set y26_physopt  "all"
+    if {[info exists ::env(Y26_STRATEGY)]} { set y26_strategy $::env(Y26_STRATEGY) }
+    if {[info exists ::env(Y26_PHYSOPT)]}  { set y26_physopt  $::env(Y26_PHYSOPT)  }
+    puts "### impl strategy '$y26_strategy', phys_opt '$y26_physopt'"
+    config_export -vivado_impl_strategy $y26_strategy
+    config_export -vivado_phys_opt      $y26_physopt
+    export_design -format ip_catalog -flow impl -rtl verilog
+}
+exit
