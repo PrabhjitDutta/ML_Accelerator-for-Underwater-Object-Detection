@@ -273,8 +273,8 @@ struct Y26ConvCfg {
     const float* wsc;     // [oc] per-output-channel weight scale
     const float* bias;    // [oc]
 #ifdef Y26_YQ8
-    // yq != 0: each 32-bit Y slot carries the consumer's uint8 code q_u8(v, q_s[o], q_lo[o], q_st[o]) instead of
-    // the float v, so the host narrows instead of re-quantizing. Params are per output channel.
+    // yq != 0: each 32-bit Y slot carries the consumer's uint8 code of v (y26_q8) instead of the float v, so the host
+    // narrows instead of re-quantizing. Params are per output channel; q_st holds 1/step.
     int yq;
     const float* q_s;
     const float* q_lo;
@@ -283,23 +283,34 @@ struct Y26ConvCfg {
 };
 
 #ifdef Y26_YQ8
-// q_u8 (layer_ops.h) on the kernel side, bit for bit: the same three IEEE single ops in the same order, then
-// round-half-even and the [0,255] clamp done on an EXACT fixed-point copy (0.5 < d < 254.5 has its lowest
-// significant bit at >= 2^-24, so ap_ufixed<32,8> holds it exactly) instead of nearbyint.
+// The code-mode Y slot. m = (v*s - lo)*inv is within 2^-14.4 of q_u8's (v*s - lo)/step for |q| < 256, so both round
+// alike unless a .5 lies within 2^-12 of m. Such a near-tie returns bits(v) + 256 instead (never 0..255: those bit
+// patterns are negative NaNs), and the host finishes it with the exact q_u8 (y26_yq_code, layer_ops.h).
 #if !defined(Y26_PREFETCH) || !defined(Y26_OCPACK)
 #error "Y26_YQ8 stages its params through the PREFETCH arrays of the OCPACK epilogue"
 #endif
-inline ap_uint<8> y26_q8(float v, float s, float lo, float st) {
+inline ap_uint<32> y26_q8(float v, float s, float lo, float inv) {
     const float t = v * s;
     const float u = t - lo;
-    const float d = u / st;
-    if (!(d > 0.5f)) return 0;                     // nearbyint(d) <= 0 (0.5 -> 0, even)
-    if (d >= 254.5f) return d > 254.5f ? 255 : 254;
-    const ap_ufixed<32, 8> f = d;
-    const ap_uint<8>  k  = f.range(31, 24);
-    const ap_uint<24> fr = f.range(23, 0);
-    const ap_uint<24> half = (ap_uint<24>)1 << 23;
-    return (ap_uint<8>)(k + ((fr > half || (fr == half && k[0])) ? 1 : 0));
+    const float m = u * inv;
+    // Range tests on the IEEE bits: m <= -1 is negative with exponent >= 127, m >= 256 has exponent >= 135.
+    y26_fp32 mb;
+    mb.f = m;
+    const ap_uint<8> me = (ap_uint<8>)(mb.u >> 23);
+    const bool mneg = (mb.u >> 31) != 0;
+    if (mneg && me >= 127) return 0;
+    if (!mneg && me >= 135) return 255;
+    const ap_fixed<36, 10> f = m;                  // AP_TRN: floor at 2^-26
+    const ap_int<10>  k  = f.range(35, 26);
+    const ap_uint<26> fr = f.range(25, 0);
+    const ap_uint<26> half = (ap_uint<26>)1 << 25, win = (ap_uint<26>)1 << 14;
+    if (k >= 0 && k <= 254 && fr > half - win && fr < half + win) {
+        y26_fp32 cvt;
+        cvt.f = v;
+        return (ap_uint<32>)cvt.u + 256;
+    }
+    const ap_int<11> r = k + (fr[25] ? 1 : 0);
+    return r < 0 ? (ap_uint<32>)0 : r > 255 ? (ap_uint<32>)255 : (ap_uint<32>)r;
 }
 #endif
 

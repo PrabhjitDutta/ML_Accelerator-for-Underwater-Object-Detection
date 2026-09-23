@@ -75,6 +75,7 @@ pixels as bytes; `.bin` frames also work. Outputs are the three one-to-one head 
 | `Y26_BOARD_CHECK=<name part>` | Also run matching convs (`.` = all) on the CPU and compare bit for bit |
 | `Y26_FUSE_CHECK=1` | Compare every fast-path input packing with plain quantization; stop on the first difference |
 | `Y26_IM2COL=0` | Turn off the host-side Img2Col rewrite of the first conv (on by default; same results) |
+| `Y26_INFLIGHT=2` | Overlap two frames in the frame loop (throughput, not latency; needs a 128 MB buffer, and the per-frame lines mix frames: read the final `[frames]` line) |
 | `Y26_ASYNC=0` | Run independent branches serially instead of on separate threads |
 | `Y26_PACK_MT=<elements>` | Pack a conv's input with OpenMP above this size (default 1048576) |
 | `Y26_PACK_SCHED=dynamic` | OpenMP schedule for input packing (default static) |

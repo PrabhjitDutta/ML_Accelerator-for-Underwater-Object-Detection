@@ -17,6 +17,7 @@ clock. The folders follow the build order. Each one holds what the next step, or
 | | |
 |---|---|
 | Kernel latency (C/RTL co-sim, one 640×640 frame) | 17,308,492 cycles = **69.23 ms = 14.44 FPS** at 250 MHz, kernel only (host CPU work not included) |
+| Kernel latency with the host's Img2Col (the host program's default, same bitstream) | The first conv runs as a 1×1 conv over 27 gathered planes: 1,324,208 → 503,048 cycles (co-sim at two input heights, extrapolated to the full frame), so 16,487,332 cycles = **65.95 ms = 15.16 FPS** |
 | Timing after route | WNS **+0.023 ns**, 0 failing endpoints |
 | Resources (placed) | 62,926 LUT (23.0%), 45,589 FF (8.3%), 212 BRAM tiles (23.3%), 717 DSP (28.5%) |
 | Power report | 6.713 W total on-chip. This is Vivado's **vectorless** estimate for the whole chip, ARM processing system included. It is not a measured value and not the kernel alone. |

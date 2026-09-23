@@ -56,9 +56,9 @@ static inline y26_fx_t y26_silu_fx(y26_fx_t v) {
 
 #ifdef Y26_YQ8
 // The code as the 32 bits of a float slot (the port word packs slots by bit pattern, never by value).
-static inline float y26_q8_slot(float v, float s, float lo, float st) {
+static inline float y26_q8_slot(float v, float s, float lo, float inv) {
     y26_fp32 cvt;
-    cvt.u = (uint32_t)(unsigned)y26_q8(v, s, lo, st);
+    cvt.u = (uint32_t)y26_q8(v, s, lo, inv);
     return cvt.f;
 }
 #endif
@@ -79,7 +79,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
     // Layout: channel c -> bank c % Y26_LANES, offset (c/Y26_LANES)*H*W + y*W + x. `complete dim=1` makes each
     // lane its own memory with a constant index after UNROLL, which is what gives II=1.
 #ifdef Y26_XB64
-    // XB64: with A1 + OCPACK + DWP, dense convs bank at ICGRP and depthwise at DWP, so banks [ICGRP, LANES) are
+    // Y26_XB64: with Y26_A1 + Y26_OCPACK + Y26_DWP, dense convs bank at ICGRP and depthwise at DWP, so banks [ICGRP, LANES) are
     // unused by this model.
   #if !(defined(Y26_A1) && defined(Y26_OCPACK) && Y26_DWP > 1 && Y26_DWP <= Y26_ICGRP)
     #error "Y26_XB64 needs Y26_A1, Y26_OCPACK and 1 < Y26_DWP <= Y26_ICGRP"
@@ -99,9 +99,9 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
     // groups == 1 implies ic0 == 0, which makes bank(lane l) == l a compile-time fact in the MAC pass.
     const bool g1 = (c.groups == 1);
 
-    // A2 row banding: a whole map needs ceil(ic/modulus)*H*W <= Y26_ACT_LANE_ELEMS per bank, which large convs
+    // Row banding: a whole map needs ceil(ic/modulus)*H*W <= Y26_ACT_LANE_ELEMS per bank, which large convs
     // exceed. So only the input rows one output row-block reads, [y26_y0, +y26_bh), are staged.
-    // A1: on the packed path the banking modulus is Y26_ICGRP (channel c -> bank c % Y26_ICGRP), so the packed
+    // Y26_A1: on the packed path the banking modulus is Y26_ICGRP (channel c -> bank c % Y26_ICGRP), so the packed
     // MAC finds channel icbi*Y26_ICGRP + l at bank l. Banks become Y26_OCPACK_P times deeper; banding absorbs it
     // by shrinking R.
 #if defined(Y26_A1) && defined(Y26_OCPACK)
@@ -623,7 +623,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
             // One flat pipeline region per tap: the p UNROLL sits inside the body, not around an outlined loop.
             // nrows is 1 here (pack_cap > 1 => icpg <= Y26_ICGRP), so there is no r loop.
 #ifdef Y26_A1
-            // A1: nrows can exceed 1, so the r axis is back. PIPELINE on r keeps one region entry per tap when nrows == 1.
+            // Y26_A1: nrows can exceed 1. PIPELINE on r keeps one region entry per tap when nrows == 1.
 #ifdef Y26_TAPLANE
             // Tap odometer: counters instead of t/c.kw and t%c.kw, which would build a divider.
             int tl_kh = 0, tl_kw = 0;
@@ -785,7 +785,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
             // Reassociating the integer sum is exact; the dequant below is order-sensitive.
 #ifdef Y26_OCPACK
 #ifdef Y26_A1
-            // A1: xbuf and wbuf are ICGRP-banked for every g1 conv, so every g1 conv must take this pass, even a final
+            // Y26_A1: xbuf and wbuf are ICGRP-banked for every g1 conv, so every g1 conv must take this pass, even a final
             // oc group with pack == 1 (the unpacked branch reads with the Y26_LANES modulus).
             if (g1) {
 #else
@@ -795,7 +795,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 // `p*Y26_ICGRP + l` is a compile-time wbuf bank. The activation read xbuf[l][xo] does not depend on p and is
                 // broadcast to all Y26_OCPACK_P multiplies.
 #ifdef Y26_A1
-                // A1: channel block icbi covers channels [icbi*Y26_ICGRP, +Y26_ICGRP), at xbuf offset icbi*xb_hw and wbuf row
+                // Y26_A1: channel block icbi covers channels [icbi*Y26_ICGRP, +Y26_ICGRP), at xbuf offset icbi*xb_hw and wbuf row
                 // icbi*ktap.
                 const int npass = (icpg + Y26_ICGRP - 1) / Y26_ICGRP;
                 // TAPLANE: the kh axis is on the lanes, so the walk is kw only (npass is 1 here).
@@ -963,7 +963,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 }
             } else
 #endif
-#ifndef Y26_XB64   // XB64: every g1 conv takes the packed MAC above, so this arm is unused
+#ifndef Y26_XB64   // every g1 conv takes the packed MAC above, so this arm is unused
             if (g1) {
                 // groups == 1  =>  ic0 == 0  =>  bank(lane l) == l, statically provable.
                 const int npass = (icpg + Y26_LANES - 1) / Y26_LANES;
@@ -1084,7 +1084,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
             } else
 #endif
 #ifdef Y26_XB64
-            { }   // XB64: grouped icpg > 1 is unsupported
+            { }   // Y26_XB64: grouped icpg > 1 is unsupported
 #else
             // Grouped fallback, not fused: a plain per-row loop. Correct for any grouped conv, not fast.
             for (int rr = 0; rr < R; ++rr) {
@@ -1202,6 +1202,11 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 const float step_op = step_o;
                 const float lo_op   = lo_o;
 #endif
+#if defined(Y26_FX_DEQUANT) && !defined(Y26_FUSE_ON)
+            // Converted once per member: inside the lane loop HLS would rebuild the float->fixed shifters per lane.
+            const y26_scale_t s_step_m = step_op, s_lo_m = lo_op, s_wsc_m = wsc_op;
+            const y26_fx_t    bs_m     = (y26_fx_t)bs_p;
+#endif
 #ifndef Y26_EFLAT_ON
             const y26_idx_t yblk = (y26_idx_t)((y26_out_t)(ocp * OH + ohb) * (ap_uint<11>)YS);
 #endif
@@ -1290,12 +1295,9 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 assert(a_k == Y26_ACCROW(p, er, owl) && z_k == zpw);   // 27-bit port bound
                 y26_fx_t v = (y26_fx_t)(s_k1 * a_k) + (y26_fx_t)(s_k2 * z_k) + (y26_fx_t)bs_p;
 #else
-                const y26_scale_t s_step = step_op;
-                const y26_scale_t s_lo   = lo_op;
-                const y26_scale_t s_wsc  = wsc_op;
-                const y26_fx_t t = (y26_fx_t)(s_step * Y26_ACCROW(p, er, owl))
-                                 + (y26_fx_t)(s_lo   * zpw);
-                y26_fx_t v = (y26_fx_t)(s_wsc * t) + (y26_fx_t)bs_p;
+                const y26_fx_t t = (y26_fx_t)(s_step_m * Y26_ACCROW(p, er, owl))
+                                 + (y26_fx_t)(s_lo_m   * zpw);
+                y26_fx_t v = (y26_fx_t)(s_wsc_m * t) + bs_m;
 #endif
 #ifdef Y26_SILU_LUT
                 // Fully fixed-point: no float/double core for the activation.

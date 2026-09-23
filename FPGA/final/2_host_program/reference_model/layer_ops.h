@@ -5,6 +5,7 @@
 #include <string>
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include "synthesis_guards.h"
 #ifdef Y26_BOARD
@@ -31,6 +32,16 @@ static inline float q_u8(float v, float ssc, float lo, float step) {
     float q = std::nearbyint((v * ssc - lo) / step);
     if (q > 255.f) q = 255.f; else if (q < 0.f) q = 0.f;
     return q;
+}
+
+// Code-mode Y slot -> the consumer's code: 0..255 is the code; anything else is bits(v) + 256, a near-tie the kernel
+// left for the exact divide (y26_q8, conv_engine.h).
+static inline uint8_t y26_yq_code(uint32_t slot, float s, float lo, float st) {
+    if (slot < 256) return (uint8_t)slot;
+    slot -= 256;
+    float v;
+    std::memcpy(&v, &slot, 4);
+    return (uint8_t)(int)q_u8(v, s, lo, st);
 }
 
 // q_u8 over n values without a divide, bit-identical to q_u8: x*(1/step) rounds like x/step except near a .5

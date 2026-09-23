@@ -57,7 +57,7 @@ void y26_conv_top(const y26_xw_t*  X,
                            depth=Y26_DEPTH_YW num_read_outstanding=Y26_ACT_NRO latency=Y26_ACT_LATENCY))
 #endif
     // latency= makes HLS pipeline deep enough to cover DRAM latency; num_read_outstanding lets those reads be in
-    // flight. Neither helps alone. Default 30 cycles ~ ZynqMP HP-port DDR4 read latency at 250 MHz.
+    // flight. Default 30 cycles ~ ZynqMP HP-port DDR4 read latency at 250 MHz.
     // _Pragma because HLS does not macro-expand inside #pragma.
     #ifndef Y26_WT_LATENCY
     #define Y26_WT_LATENCY 30

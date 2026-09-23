@@ -338,7 +338,7 @@ struct Buf {
         w32(0xa4, c.ph);       w32(0xac, c.pw);       w32(0xb4, c.groups);  w32(0xbc, c.act);
         w32(0xc4, c.perch ? 1 : 0);  wf(0xcc, c.sa);  wf(0xd4, c.lo);
 #ifdef Y26_YQ8
-        // Offsets of the yq/qs/qlo/qst registers: verify against the driver header (xy26_conv_top_hw.h) of the yq build.
+        // Offsets of the yq/qs/qlo/qst registers, from the yq build's driver header (xy26_conv_top_hw.h).
         enum { Y26_REG_YQ = 0xdc, Y26_REG_QS = 0xe4, Y26_REG_QLO = 0xf0, Y26_REG_QST = 0xfc };
         // yq is written on every run: registers persist, and a float conv after a coded one must not inherit yq=1.
         w32(Y26_REG_YQ, (uint32_t)L.yq);
@@ -475,7 +475,7 @@ const WSlot& weights_slot(Buf& B, const ConvW& c) {
         float* qs = reinterpret_cast<float*>(B.host + s.qs);
         float* ql = reinterpret_cast<float*>(B.host + s.qlo);
         float* qt = reinterpret_cast<float*>(B.host + s.qst);
-        for (int o = 0; o < c.oc; ++o) { qs[o] = q->ssc[qoff + o]; ql[o] = q->lo_of(qoff + o); qt[o] = q->step_of(qoff + o); }
+        for (int o = 0; o < c.oc; ++o) { qs[o] = q->ssc[qoff + o]; ql[o] = q->lo_of(qoff + o); qt[o] = 1.f / q->step_of(qoff + o); }
     }
     B.to_dev(s.wt, end - s.wt);
     return g_wslots.emplace(&c, s).first->second;
@@ -846,8 +846,11 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         // (byte i is written after slot i is read, and every later slot sits at byte >= 4i).
         uint8_t* d = reinterpret_cast<uint8_t*>(y.d.data());
         const uint32_t* s = reinterpret_cast<const uint32_t*>(B.host + L.y);
-        for (size_t row = 0; row < (size_t)c.oc * OH; ++row)
-            for (int w = 0; w < OW; ++w) d[row * OW + w] = (uint8_t)s[row * YS + w];
+        for (size_t row = 0; row < (size_t)c.oc * OH; ++row) {
+            const int ch = qoff + (int)(row / OH);
+            const float qs = cons->ssc[ch], ql = cons->lo_of(ch), qt = cons->step_of(ch);
+            for (int w = 0; w < OW; ++w) d[row * OW + w] = y26_yq_code(s[row * YS + w], qs, ql, qt);
+        }
         std::lock_guard<std::mutex> g(g_cmu);
         g_codes[y.d.data()] = {cons, qoff};
         ++g_ncoded;

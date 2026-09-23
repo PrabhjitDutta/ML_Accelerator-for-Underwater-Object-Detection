@@ -34,7 +34,7 @@ Each folder has its own `README.md` with the details.
 | | |
 |---|---|
 | FPGA clock | 250 MHz, timing met |
-| Hardware time per 640×640 image | **69.2 ms, about 14 images per second**. Measured in simulation; counts the FPGA part only. |
+| Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA part only. |
 | Chip resources used | 23% of logic (LUTs), 23% of block RAM, 29% of DSP blocks |
 | Correctness | The FPGA engine matches the C++ reference exactly on all 100 layers it runs. |
 

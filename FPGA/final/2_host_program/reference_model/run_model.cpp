@@ -3,8 +3,12 @@
 //   ./yolo26_csim <weights_dir> - <out_dir>              frame loop: input paths on stdin, detections to
 //                                                        <out_dir>/<stem>.txt ("cls score x1 y1 x2 y2")
 // An input is either input.bin (float32 3x640x640) or .u8 (the same frame as bytes k, value k/255.f).
+// Y26_INFLIGHT=N (default 1): the frame loop overlaps up to N frames.
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <cstdlib>
+#include <deque>
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -76,30 +80,46 @@ static int run(int argc, char** argv) {
         bool more = next_path(pn);
         std::future<Tensor> pending;
         if (more) pending = std::async(std::launch::async, load, pn);
-        for (int n = 0; more;) {
+        // Overlapped frames need ~N x the one-frame DMA buffer (conv X regions cannot spill), and their per-frame
+        // [board] splits mix frames: read the [frames] line. Y26_BOARD_CHECK forces 1.
+        const char* ie = std::getenv("Y26_INFLIGHT");
+        const int inflight = std::getenv("Y26_BOARD_CHECK") ? 1 : std::max(1, ie ? std::atoi(ie) : 1);
+        std::deque<std::future<void>> busy;
+        const auto tf = clk::now();
+        int n = 0;
+        while (more) {
             p = pn;
             const auto t0 = clk::now();
-            const Tensor input = pending.get();
+            Tensor input = pending.get();
             more = next_path(pn);
             if (more) pending = std::async(std::launch::async, load, pn);
             const auto t1 = clk::now();
-            y26_board_weights(W);
-            const std::vector<Tensor> o = run_trunk(W, input, "");
-            const auto t2 = clk::now();
-            const auto dets = yolo26::decode_o2o(o[0].d.data(), o[1].d.data(), o[2].d.data(), o[0].C - 4, 300);
-            std::string stem = p.substr(p.find_last_of("/\\") + 1);
-            if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".bin") == 0) stem.resize(stem.size() - 4);
-            else if (stem.size() > 3 && stem.compare(stem.size() - 3, 3, ".u8") == 0) stem.resize(stem.size() - 3);
-            const std::string op = ddir + "/" + stem + ".txt";
-            FILE* f = std::fopen(op.c_str(), "w");
-            if (!f) throw std::runtime_error("cannot write " + op);
-            for (const auto& d : dets) std::fprintf(f, "%d %.6f %.5f %.5f %.5f %.5f\n", d.cls, d.score, d.x1, d.y1, d.x2, d.y2);
-            std::fclose(f);
-            const auto t3 = clk::now();
-            std::printf("[frame] %d %s: %.1f ms (read %.1f | trunk %.1f | decode+write %.1f), %zu dets\n", n, stem.c_str(),
-                        ms(t0, t3), ms(t0, t1), ms(t1, t2), ms(t2, t3), dets.size());
-            y26_frame_end(n++);
+            auto frame = [&, n, p, t0, t1](Tensor input) {
+                y26_board_weights(W);
+                const std::vector<Tensor> o = run_trunk(W, input, "");
+                const auto t2 = clk::now();
+                const auto dets = yolo26::decode_o2o(o[0].d.data(), o[1].d.data(), o[2].d.data(), o[0].C - 4, 300);
+                std::string stem = p.substr(p.find_last_of("/\\") + 1);
+                if (stem.size() > 4 && stem.compare(stem.size() - 4, 4, ".bin") == 0) stem.resize(stem.size() - 4);
+                else if (stem.size() > 3 && stem.compare(stem.size() - 3, 3, ".u8") == 0) stem.resize(stem.size() - 3);
+                const std::string op = ddir + "/" + stem + ".txt";
+                FILE* f = std::fopen(op.c_str(), "w");
+                if (!f) throw std::runtime_error("cannot write " + op);
+                for (const auto& d : dets) std::fprintf(f, "%d %.6f %.5f %.5f %.5f %.5f\n", d.cls, d.score, d.x1, d.y1, d.x2, d.y2);
+                std::fclose(f);
+                const auto t3 = clk::now();
+                std::printf("[frame] %d %s: %.1f ms (read %.1f | trunk %.1f | decode+write %.1f), %zu dets\n", n, stem.c_str(),
+                            ms(t0, t3), ms(t0, t1), ms(t1, t2), ms(t2, t3), dets.size());
+                y26_frame_end(n);
+            };
+            if (inflight == 1) { frame(std::move(input)); ++n; continue; }
+            if ((int)busy.size() >= inflight) { busy.front().get(); busy.pop_front(); }
+            busy.push_back(std::async(std::launch::async, frame, std::move(input)));
+            ++n;
         }
+        while (!busy.empty()) { busy.front().get(); busy.pop_front(); }
+        const double tot = ms(tf, clk::now());
+        std::printf("[frames] %d frames in %.1f ms = %.2f FPS (in flight %d)\n", n, tot, tot > 0 ? 1000.0 * n / tot : 0.0, inflight);
         return 0;
     }
     Tensor input = load(inbin);

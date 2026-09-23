@@ -1,6 +1,6 @@
 # Post-route power, utilization and timing for the per-conv kernel on XCZU9EG.
 #   # 1. a routed design:  $env:Y26_IMPL = 1; vitis-run --mode hls --tcl Y:/model_c/scripts/hls_csim_synth_cosim.tcl
-#   # 2. vivado -mode batch -source Y:/model_c/scripts/vivado_power_report.tcl -tclargs C:/hls_y26/prj_<sol>/<sol>
+#   # 2. vivado -mode batch -source Y:/model_c/scripts/vivado_power_report.tcl -tclargs <work dir>/prj_<sol>/<sol>
 # Space-free paths only (see hls_csim_synth_cosim.tcl).
 # Without a SAIF, report_power is vectorless (default toggle rates), an estimate. With a SAIF from cosim it uses
 # real activity. The printed confidence level says which.

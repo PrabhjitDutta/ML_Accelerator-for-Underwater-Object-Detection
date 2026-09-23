@@ -64,13 +64,13 @@ int main(int argc, char** argv) {
     std::vector<float>     pStp(Y26_DEPTH_IC), pLo  (Y26_DEPTH_IC);
     std::vector<float>     pY  (Y26_DEPTH_Y);
 #ifdef Y26_YQ8
-    // yq check: the same conv runs again with yq=1 and every slot must hold exactly q_u8(float slot, per-oc
-    // params). Exact even under FX_DEQUANT. Y26_TB_YQ=0 skips it.
-    std::vector<float>     pQs(Y26_DEPTH_OC), pQlo(Y26_DEPTH_OC), pQst(Y26_DEPTH_OC), pY2(Y26_DEPTH_Y);
+    // yq check: the same conv runs again with yq=1 and every slot must decode (y26_yq_code) to exactly
+    // q_u8(float slot, per-oc params). Exact even under FX_DEQUANT. Y26_TB_YQ=0 skips it.
+    std::vector<float>     pQs(Y26_DEPTH_OC), pQlo(Y26_DEPTH_OC), pQst(Y26_DEPTH_OC), pQinv(Y26_DEPTH_OC), pY2(Y26_DEPTH_Y);
     const char* yqe = getenv("Y26_TB_YQ");
     const bool do_yq = !(yqe && strcmp(yqe, "0") == 0);
     int yq_tested = 0, yq_failed = 0;
-    long yq_clamp0 = 0, yq_clamp255 = 0, yq_elems = 0;
+    long yq_clamp0 = 0, yq_clamp255 = 0, yq_elems = 0, yq_ties = 0;
 #endif
 
     int tested = 0, failed = 0, skipped = 0;
@@ -81,7 +81,20 @@ int main(int argc, char** argv) {
 
     for (const auto& kv : Wg.conv) {
         const std::string& name = kv.first;
-        const ConvW& c = kv.second;
+        // Y26_TB_IM2COL=1: a dense kxk conv with ic*kh*kw <= Y26_ICGRP and input zero point 0 runs as the host's
+        // Img2Col 1x1 over ic*kh*kw planes (board_host.cpp im2col_conv); pass SP = its output size.
+        static const bool tb_i2c = getenv("Y26_TB_IM2COL") && strcmp(getenv("Y26_TB_IM2COL"), "1") == 0;
+        ConvW i2c_w;
+        const ConvW& k0 = kv.second;
+        const bool i2c = tb_i2c && k0.groups == 1 && !k0.perch && k0.lo == 0.f && k0.kh * k0.kw > 1 &&
+                         k0.ic * k0.kh * k0.kw <= Y26_ICGRP;
+        if (i2c) {
+            i2c_w = k0;
+            i2c_w.ic = k0.ic * k0.kh * k0.kw;  i2c_w.kh = i2c_w.kw = i2c_w.sh = i2c_w.sw = 1;  i2c_w.ph = i2c_w.pw = 0;
+            i2c_w.ssc.clear();
+            for (int i = 0; i < i2c_w.ic; ++i) i2c_w.ssc.push_back(k0.ssc[i / (k0.kh * k0.kw)]);
+        }
+        const ConvW& c = i2c ? i2c_w : k0;
 
         // SmoothQuant integer convs only; the 2 FP32-fallback convs (attn.pe) are out of scope.
         if (!c.quant || !c.asym) { ++skipped; continue; }
@@ -233,19 +246,26 @@ int main(int argc, char** argv) {
                 const float p5 = vs[vs.size() / 20], p95 = vs[vs.size() - 1 - vs.size() / 20];
                 const float sc = 0.75f + 0.125f * (float)(o % 5);
                 pQs[o] = sc; pQlo[o] = p5 * sc; pQst[o] = std::max((p95 - p5) * sc, 1e-4f) / 255.f;
+                pQinv[o] = 1.f / pQst[o];
             }
             y26_yw_t* yptr2 = reinterpret_cast<y26_yw_t*>(pY2.data());
             y26_conv_top(xptr, wptr, cfg.wsc, cfg.bias, cfg.step_v, cfg.lo_v, yptr2,
                          H, W, cfg.oc, cfg.ic, cfg.kh, cfg.kw, cfg.sh, cfg.sw, cfg.ph, cfg.pw,
                          cfg.groups, cfg.act, cfg.perch, cfg.step, cfg.lo,
-                         1, pQs.data(), pQlo.data(), pQst.data());
+                         1, pQs.data(), pQlo.data(), pQinv.data());
             size_t qbad = 0;
             for (int o = 0; o < c.oc; ++o)
                 for (int r_ = 0; r_ < OHt; ++r_)
                     for (int w_ = 0; w_ < OWt; ++w_) {
                         const size_t i = ((size_t)o * OHt + r_) * YSq + w_;
                         const uint32_t want = (uint32_t)(int)q_u8(out[i], pQs[o], pQlo[o], pQst[o]);
-                        uint32_t got; memcpy(&got, &pY2[i], 4);
+                        uint32_t slot; memcpy(&slot, &pY2[i], 4);
+                        const uint32_t got = y26_yq_code(slot, pQs[o], pQlo[o], pQst[o]);
+                        if (slot > 255) {                // a near-tie escape must carry the float slot itself
+                            ++yq_ties;
+                            uint32_t fb; memcpy(&fb, &out[i], 4);
+                            qbad += slot - 256 != fb;
+                        }
                         qbad += got != want;
                         yq_clamp0 += want == 0; yq_clamp255 += want == 255; ++yq_elems;
                     }
@@ -299,9 +319,9 @@ int main(int argc, char** argv) {
 
 #ifdef Y26_YQ8
     if (do_yq) {
-        printf("\n=== YQ8 code-mode gate: %d convs, %d mismatched (%ld codes: %.1f%% at 0, %.1f%% at 255) ===\n",
+        printf("\n=== YQ8 code-mode gate: %d convs, %d mismatched (%ld codes: %.1f%% at 0, %.1f%% at 255, %ld near-tie escapes) ===\n",
                yq_tested, yq_failed, yq_elems, yq_elems ? 100.0 * yq_clamp0 / yq_elems : 0.0,
-               yq_elems ? 100.0 * yq_clamp255 / yq_elems : 0.0);
+               yq_elems ? 100.0 * yq_clamp255 / yq_elems : 0.0, yq_ties);
         if (yq_failed) { printf("\nFAIL - YQ8 codes differ from q_u8(kernel float).\n"); return 1; }
     }
 #endif

@@ -3,7 +3,7 @@
 # Setup (neither survives a reboot):
 #   subst Y: "C:\Users\Prabhjit Dutta\Desktop\MTP\Project\UOD\repo"
 #   $env:XILINXD_LICENSE_FILE = "<license files>"      # must be set in the calling process
-#   cd C:\hls_y26 ; vitis-run --mode hls --tcl Y:/model_c/scripts/hls_synth_cosim_skip_csim.tcl
+#   cd <space-free work dir> ; vitis-run --mode hls --tcl Y:/model_c/scripts/hls_synth_cosim_skip_csim.tcl
 # vitis-run is on PATH only after settings64.bat (or call <Vitis>\bin\vitis-run.bat). Under PowerShell a
 # missing command leaves $LASTEXITCODE unchanged, so check for the report files, not the exit code.
 #

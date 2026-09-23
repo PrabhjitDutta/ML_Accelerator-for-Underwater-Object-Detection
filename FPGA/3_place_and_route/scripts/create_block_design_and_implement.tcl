@@ -6,7 +6,7 @@ set fmhz   [lindex $argv 1]
 set outdir [lindex $argv 2]
 set part   xczu9eg-ffvb1156-2-e
 set board  xilinx.com:zcu102:part0:3.4
-# 4th arg = kernel IP repo (shipping: C:/hls_y26/prj_sol_YA128/sol_YA128/impl/ip).
+# 4th arg = kernel IP repo (<hls project>/<solution>/impl/ip).
 set iprepo [expr {$argc > 3 ? [lindex $argv 3] : "C:/hls_y26/prj_sol_ALL/sol_ALL/impl/ip"}]
 # 5th arg `coh`: gmem_act -> S_AXI_HPC0_FPD, gmem_out -> S_AXI_HPC1_FPD, I/O-coherent through the CCI
 # (AxCACHE 1111, AxPROT 010), so the host can skip X/Y cache maintenance (Y26_COHERENT=1).

@@ -2,14 +2,17 @@
 
 Everything here is plain C++ built with `g++` (MSYS2 ucrt64 on Windows, native `g++` on the board). Only the files
 in `hls_kernel/` are synthesized to the FPGA; the rest checks them or drives them. The sources are the **final**
-versions: the ones behind the shipping bitstream in `../FPGA/` (solution `sol_YA128`, 250 MHz).
+versions: the ones behind the shipping bitstream in `../FPGA/` (solution `sol_YA128`, 250 MHz). One later change in
+`conv_engine.cpp` (the dequant's float->fixed constant conversions hoisted out of the lane loop) synthesizes to the
+same area and gives identical results; the `-DY26_YQ8` code (the kernel writes the next layer's uint8 codes) is off
+in the shipping flag set and needs its own bitstream.
 
 | Folder | What it is |
 |---|---|
 | `hls_kernel/` | The convolution engine that becomes FPGA hardware. `conv_engine_top.cpp` holds the synthesis top function `y26_conv_top`; `conv_engine.cpp/.h` is the datapath; `silu_lut.h` is the fixed-point SiLU table. |
 | `reference_model/` | The whole YOLO26s network in C++ (the "C-sim"): `yolo26_network.cpp` runs the layers, `layer_ops.h` holds conv/quantize/etc., `run_model.cpp` is the command-line driver. It is the bit-exact golden reference the kernel is checked against, and on the board it is also the host program's network code. |
 | `testbench/` | `conv_engine_tb.cpp` runs every conv through the kernel and through the reference and compares them. `detection_decode_test.cpp` checks the box decoder. `frame_conv_geometry.txt` lists each of the 100 kernel convs with its real input size. |
-| `board_host/` | The ZCU102 ARM-side program: `board_host.cpp` packs activations/weights into DDR, starts the kernel, unpacks results. Built together with `reference_model/` and `hls_kernel/`. |
+| `board_host/` | The ZCU102 ARM-side program: `board_host.cpp` packs activations/weights into DDR, starts the kernel, unpacks results. Built together with `reference_model/` and `hls_kernel/`. `test_quantizer.cpp` and `test_yq8_codes.cpp` check the input quantizer and the `-DY26_YQ8` code slots against their exact forms. |
 | `scripts/` | Build and check scripts (below) and the Vitis HLS / Vivado Tcl flows. |
 | `export/` | Python scripts that exported the PyTorch/OpenVINO model to `weights/` and validated each step. They were run from the original `UOD/hls/` layout, so their default paths assume it. |
 | `weights/` | The shipping weights: INT8 SmoothQuant, channel-compacted, constant-folded (`weights_sq_compact_fold`), as flat `.bin` files plus manifests. |
@@ -56,6 +59,7 @@ post-route timing/utilization/power reports. Each script's header documents its 
 | `board_host/board_host.cpp` | `host/src/y26_board.cpp` |
 | `board_host/build_board_host.sh` | `host/src/build.sh` |
 | `board_host/test_quantizer.cpp` | `host/src/test_quant.cpp` |
+| `board_host/test_yq8_codes.cpp` | `host/src/test_q8.cpp` |
 | `board_host/compare_dumps_cosine.py` | `host/src/cmp.py` |
 | `board_host/frames_to_u8.py` | `host/src/to_u8.py` |
 | `scripts/build_reference_model.sh` | `build_csim.sh` (rewritten for this layout) |
