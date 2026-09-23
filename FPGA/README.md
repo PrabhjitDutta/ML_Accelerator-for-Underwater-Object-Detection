@@ -10,6 +10,7 @@ clock. The folders follow the build order. Each one holds what the next step, or
 | `2_cosim_latency/` | C/RTL co-simulation | Cycles for each of the 100 kernel convs of one frame. This is where the latency figure comes from. |
 | `3_place_and_route/` | Vivado implementation | Routed timing summary, placed utilization, vectorless power, route status, DRC and methodology checks, clock utilization; `block_design/` (the Vivado block design connecting the kernel to the ARM processing system, `.bd`, plus its generated top-level Verilog wrapper). `routed_checkpoint/`: the fully placed and routed design (`.dcp`, 78 MB); open it in Vivado to re-run timing or power analysis without re-implementing. `scripts/`: the Tcl that built the block design and ran implementation, and the timing-closure re-implementation recipe that produced these results. |
 | `4_bitstream/` | Bitstream + hardware handoff | `.bit` (FPGA configuration), `.hwh` (register and address map that PYNQ reads; it must keep the same base name as the `.bit`), and `.xsa` (hardware platform for Vitis / PetaLinux). |
+| `final/` | Board deployment package | Only what the board needs: bitstream, host program source, weights, a first-run check and a frame converter. See `final/README.md`. |
 
 ## Key numbers
 
