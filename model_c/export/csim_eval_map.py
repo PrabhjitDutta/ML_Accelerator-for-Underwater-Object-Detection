@@ -27,21 +27,23 @@ from ultralytics.data.augment import LetterBox
 from ultralytics.utils.ops import scale_boxes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, "/workspace/ckarfa/projects/UOD/training/yolo26s")
+# UOD_ROOT: the project root. Default is the server; set it to run anywhere else (e.g. the Windows PC).
+ROOT = os.environ.get("UOD_ROOT", "/workspace/ckarfa/projects/UOD")
+sys.path.insert(0, os.path.join(ROOT, "training/yolo26s"))
 from yolo26_trunk import Yolo26Trunk  # noqa: E402
 from ultralytics import YOLO  # noqa: E402
 
-BASE = "/workspace/ckarfa/projects/UOD/dataset/urpc 2018"
+BASE = os.path.join(ROOT, "dataset/urpc 2018")
 GT = os.path.join(BASE, "annotations/instances_val2018.json")
 IMG = os.path.join(BASE, "val2018/images")
-CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
+CKPT = os.path.join(ROOT, "final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt")
 # heads-only build: skips the ~40 MB/image of intermediate layer dumps that decode never
 # reads (verified byte-identical head maps). ~4x faster over a whole val pass.
-# YOLO26_CSIM_BIN overrides which binary is scored -- set it to csim/yolo26_csim_deploy to score the
+# YOLO26_CSIM_BIN overrides which binary is scored -- set it to build/yolo26_csim_deploy to score the
 # deployment shape (one2many head compiled out). That build emits no o2m_* dumps, so it REQUIRES
 # --cpp_decode; the Python-decode path below reads both tags and would fail on the missing files.
-CSIM = os.environ.get("YOLO26_CSIM_BIN") or os.path.join(HERE, "..", "csim", "yolo26_csim_fast")
-DECODE = os.path.join(HERE, "..", "csim", "decode_test")   # C++ (ARM-PS) one2one decoder, decode.h
+CSIM = os.environ.get("YOLO26_CSIM_BIN") or os.path.join(HERE, "..", "build", "yolo26_csim")
+DECODE = os.path.join(HERE, "..", "build", "decode_test")   # C++ (ARM-PS) one2one decoder, decode.h
 SHAPES = [(8, 80, 80), (8, 40, 40), (8, 20, 20)]
 
 
@@ -74,6 +76,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("weights", help="C-sim weights dir (e.g. hls/weights_sq_compact_fold)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="images run in parallel (one binary each, own tmp dir); OMP threads split between them")
     ap.add_argument("--cpp_decode", action="store_true",
                     help="use the C++ decoder (decode.h/decode_test) instead of Python trunk.decode -- "
                          "makes the whole image->detections path C++ (the deployment path)")
@@ -107,43 +111,56 @@ def main():
 
 
 def run_eval(tmp, paths, stem2id, wdir, args, trunk, conf, results, eval_ids):
-    inbin = os.path.join(tmp, "input.bin")
-    with torch.no_grad():
-        for k, fn in enumerate(paths):
-            iid = stem2id.get(os.path.splitext(fn)[0])
-            if iid is None:
-                continue
-            eval_ids.append(iid)
-            x, shape0 = preprocess(os.path.join(IMG, fn))
-            x.astype("<f4").tofile(inbin)
-            subprocess.run([CSIM, wdir, inbin, tmp], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env={**os.environ, "YOLO26_HEADS_ONLY": "1",
-                                # ultralytics sets OMP_NUM_THREADS=1 at import time to stop ITS
-                                # workers oversubscribing. Inheriting that pins the OpenMP C-sim to
-                                # a single core of 48 -- ~15 s/image instead of ~2.5 s.
-                                "OMP_NUM_THREADS": str(min(32, os.cpu_count() or 8))})
+    from concurrent.futures import ThreadPoolExecutor
+    nw = max(1, args.workers)
+    omp = str(max(1, min(32, os.cpu_count() or 8) // nw))
+
+    def one(k_fn):
+        k, fn = k_fn
+        iid = stem2id.get(os.path.splitext(fn)[0])
+        if iid is None:
+            return None, []
+        wt = os.path.join(tmp, "w%d" % (k % nw)) if nw == 1 else tempfile.mkdtemp(dir=tmp)
+        os.makedirs(wt, exist_ok=True)
+        inbin = os.path.join(wt, "input.bin")
+        x, shape0 = preprocess(os.path.join(IMG, fn))
+        x.astype("<f4").tofile(inbin)
+        subprocess.run([CSIM, wdir, inbin, wt], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       env={**os.environ, "YOLO26_HEADS_ONLY": "1",
+                            # ultralytics sets OMP_NUM_THREADS=1 at import time to stop ITS
+                            # workers oversubscribing. Inheriting that pins the OpenMP C-sim to
+                            # a single core of 48 -- ~15 s/image instead of ~2.5 s.
+                            "OMP_NUM_THREADS": omp})
+        with torch.no_grad():
             if args.cpp_decode:
-                det = cpp_decode(tmp, conf)
+                det = cpp_decode(wt, conf)
             else:
                 maps = []
                 for tag in ("o2m", "o2o"):
                     for i, shp in enumerate(SHAPES):
-                        a = np.fromfile(os.path.join(tmp, f"{tag}_{i}_csim.bin"),
+                        a = np.fromfile(os.path.join(wt, f"{tag}_{i}_csim.bin"),
                                         dtype="<f4").reshape(1, *shp)
                         maps.append(torch.from_numpy(a.copy()))
                 det = trunk.decode(tuple(maps))[0].cpu().numpy()
-            det = det[det[:, 4] >= conf] if len(det) else det
-            if len(det) == 0:
-                continue
-            boxes = scale_boxes((640, 640), torch.from_numpy(det[:, :4].copy()), shape0).numpy()
-            for (x1, y1, x2, y2), s, c in zip(boxes, det[:, 4], det[:, 5].astype(int)):
-                results.append({"image_id": iid, "category_id": int(c),
-                                "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                                "score": float(s)})
+        if nw > 1:
+            shutil.rmtree(wt, ignore_errors=True)
+        det = det[det[:, 4] >= conf] if len(det) else det
+        if len(det) == 0:
+            return iid, []
+        boxes = scale_boxes((640, 640), torch.from_numpy(det[:, :4].copy()), shape0).numpy()
+        return iid, [{"image_id": iid, "category_id": int(c),
+                      "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+                      "score": float(s)}
+                     for (x1, y1, x2, y2), s, c in zip(boxes, det[:, 4], det[:, 5].astype(int))]
+
+    with ThreadPoolExecutor(nw) as ex:          # map() keeps image order, so results are deterministic
+        for k, (iid, dets) in enumerate(ex.map(one, enumerate(paths))):
+            if iid is not None:
+                eval_ids.append(iid)
+                results.extend(dets)
             if (k + 1) % 25 == 0:
                 print(f"[csim-eval] {k+1}/{len(paths)} images, {len(results)} dets", flush=True)
-
 
 if __name__ == "__main__":
     main()

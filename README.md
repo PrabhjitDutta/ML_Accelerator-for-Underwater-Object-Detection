@@ -1,47 +1,52 @@
-# YOLO26s Underwater Object Detection — FPGA Deployment
+# Underwater Object Detection on an FPGA (YOLO26s)
 
-## Purpose
+This project takes **YOLO26s**, an object-detection neural network, and teaches it to find sea creatures in
+underwater photos: sea cucumbers, sea urchins, scallops and starfish, from the URPC2018 dataset. It then runs the
+network as custom hardware on a **Xilinx ZCU102 FPGA board**.
 
-Deploy a YOLO26s object detector, trained for underwater imagery (URPC2018), onto a
-Xilinx ZCU102 (`xczu9eg`) FPGA as a real-time HLS accelerator. The goal is a model small
-and quantized enough to fit the board's LUT/BRAM/DSP budget and power envelope, with
-bit-exact correctness carried all the way from the trained PyTorch model down to the
-synthesizable C++ kernel before any hardware is built.
+## What is in this repo
 
-## Repo layout
+| Folder | What it contains |
+|---|---|
+| `model_python/` | The neural network in Python: training it, making it smaller (pruning), and converting it to 8-bit numbers (quantization). |
+| `model_c/` | The same network rewritten in C++. It includes the part that becomes FPGA hardware, the tests that check it, and the program that runs on the board's ARM processor. |
+| `FPGA/` | The finished hardware build: the generated Verilog, the build reports, and the bitstream file that programs the board. |
 
+Each folder has its own `README.md` with the details.
+
+## How it was built, step by step
+
+1. **Train:** start from a YOLO26s model trained on everyday photos (COCO) and fine-tune it on underwater images.
+2. **Shrink:** remove half of the network's channels (pruning), then retrain briefly to recover the lost accuracy.
+3. **Quantize:** convert weights and activations from 32-bit floats to 8-bit integers (SmoothQuant, via OpenVINO).
+   Smaller numbers need far less hardware.
+4. **Export:** save every layer's weights as plain binary files in `model_c/weights/`, so the C++ code needs no
+   Python.
+5. **C++ model:** rebuild the network in C++. The part that runs on the FPGA, the convolution engine, is tested
+   against a C++ reference model. It must match **exactly**, bit for bit, on every layer.
+6. **Hardware:** Vitis HLS turns the C++ convolution engine into Verilog. Vivado then places and routes it on the
+   chip and produces the bitstream (`FPGA/`).
+7. **Run on the board:** the ZCU102's ARM processor loads an image and sends each layer to the FPGA hardware. It then
+   turns the network's output into boxes around the detected objects (`model_c/board_host/`).
+
+## Results so far
+
+| | |
+|---|---|
+| FPGA clock | 250 MHz, timing met |
+| Hardware time per 640×640 image | **69.2 ms, about 14 images per second**. Measured in simulation; counts the FPGA part only. |
+| Chip resources used | 23% of logic (LUTs), 23% of block RAM, 29% of DSP blocks |
+| Correctness | The FPGA engine matches the C++ reference exactly on all 100 layers it runs. |
+
+**Status:** the bitstream is built, and the board program has been tested on a PC. Running it on the actual board
+is the next step.
+
+## Quick start
+
+To check the C++ side on a PC (needs `g++`; `model_c/README.md` lists every check):
+
+```bash
+bash model_c/scripts/build_reference_model.sh
 ```
-model_python/   the model itself: how it was trained, pruned, and quantized
-model_c/        the HLS kernel: C-sim, weight export, and the fixed-point conv engine
-```
 
-## Pipeline
-
-1. **Fine-tune** — COCO-pretrained YOLO26s fine-tuned on URPC2018.
-   (`model_python/scripts/train_ft_resumable.py` → `Weights/yolo26s_urpc2018_finetuned.pt`)
-2. **Prune** — structured channel pruning via `torch_pruning`, 50% of channels removed.
-   (`model_python/scripts/prune_yolo26s.py`)
-3. **Recovery fine-tune** — the pruned model regains the accuracy pruning cost it.
-   (`model_python/scripts/train_prune_finetune.py` → `Weights/yolo26s_urpc2018_finetuned_pruned50.pt`,
-   the final PyTorch checkpoint)
-4. **INT8 quantization** — SmoothQuant, applied externally via OpenVINO's quantizer, producing
-   an OpenVINO IR (`Weights/OpenVINO quantized IR/`). `scripts/ingest_smoothquant.py` reads that
-   IR's per-layer scales back out and applies them to the PyTorch model in memory; there is no
-   separate "quantized .pt" — the IR *is* the quantized model. `scripts/sq_eval_map.py` runs COCO
-   mAP directly against the IR to confirm quantization didn't break accuracy.
-5. **Export** — `scripts/export_weights_yolo26.py` / `compact_yolo26.py` dump every layer's
-   weights, biases, and quant scales as flat `.bin` files (`model_c/weights/`) for the C++ side
-   to load — no PyTorch/OpenVINO runtime needed from here on.
-6. **C-sim** — `model_c/csim/` is the synthesizable HLS kernel (`yolo26_hls.cpp`) plus a
-   testbench (`yolo26_hls_tb.cpp`) that checks it **bit-exact**, not "close enough", against a
-   double-precision reference (`yolo26_trunk.cpp`) fed the same exported weights.
-
-## Status: through C-sim
-
-The kernel passes its stage-1 gate: fixed-point (`ap_int<32>` accumulator) output matches the
-double-precision reference **exactly**, conv by conv, across the full network. This is the same
-source file used for both the plain g++ testbench and the Vitis HLS C-sim/cosim testbench, so
-nothing is validated in one and skipped in the other.
-
-Not yet covered here: synthesis, FPGA implementation (timing/area/power), and RTL cosimulation —
-that work is tracked separately, outside this repo.
+This builds the C++ model, runs it on a sample image, and compares the result with saved known-good outputs.
