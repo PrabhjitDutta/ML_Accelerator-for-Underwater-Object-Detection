@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# test_packing.sh - the host's self-check (PC). With float dequant the kernel C-model is bit-exact to
-# conv2d() (tb_s1), so the trunk run through the host's DDR image must produce BYTE-IDENTICAL dumps to
-# the plain CPU trunk. Any error in quantize/pack/permute/stride/unpack breaks that.
+# Host self-check (PC). With float dequant the kernel C-model is bit-exact to conv2d(), so the trunk run through
+# the host's DDR image must give byte-identical dumps to the plain CPU trunk.
 #   bash board_host/test_packing.sh <weights_dir> <input.bin>
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

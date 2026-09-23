@@ -1,20 +1,12 @@
                       
 """Trunk / decode split of the end2end YOLO26s.
 
-The end2end Detect head's decode (`_inference`: anchor grid via torch.full, dist2bbox,
-strides, top-k) is (a) untraceable by NNCF's torch quantizer and (b) not a conv op you
-put on an FPGA fabric. This wrapper exposes the **trunk** = backbone + neck + the head's
-pred-convs (one2many `cv2/cv3` and one2one `one2one_cv2/one2one_cv3`), returning the raw
-per-scale prediction maps [B, 4*reg_max + nc, H, W]. That trunk is:
-  * a clean conv-only graph NNCF CAN trace/quantize (enabling QAT), and
-  * exactly what the HLS accelerator computes; the decode + top-k run on the host (ARM PS).
-
-Helpers rebuild the ultralytics E2E loss inputs (for QAT) and run the original decode
-(for eval), so the split is loss- and metric-faithful.
+The trunk (backbone + neck + head pred-convs) returns raw per-scale maps [B, 4*reg_max + nc, H, W]; it
+is traceable for NNCF quantization and is what the FPGA computes. The decode (anchors, dist2bbox,
+top-k) runs on the host. Helpers rebuild the E2E loss inputs (QAT) and run the original decode (eval).
 """
 import torch
 import torch.nn as nn
-
 
 class Yolo26Trunk(nn.Module):
     """Runs layers 0..22 + the Detect pred-convs; returns flat per-scale raw maps.

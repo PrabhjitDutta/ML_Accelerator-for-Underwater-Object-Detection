@@ -1,32 +1,15 @@
                       
-"""Phase 2: build the INT8 fake-quant reference for the pruned50 YOLO26s trunk.
+"""Build the INT8 fake-quant reference: weights_int8/ (BN-folded, per-output-channel symmetric int8
+weights, bias, manifest_int8.txt with each conv's input scale sa) and dumps_int8/<name>_python.bin
+(oracle activations).
 
-This is the quantization counterpart of export_weights_yolo26.py + dump_yolo26_features.py. It
-produces two things from ONE fake-quantized PyTorch model, so the C-sim can be validated against a
-faithful oracle exactly the way the FP32 phase was:
+  sw[o]   = max|Wf[o]|/127,  w_int = round(Wf/sw)
+  sa      = max|x|/127 (calibrated over N images),  x_int = clamp(round(x/sa), -127, 127)
+  real[o] = (sum_i x_int[i]*w_int[o,i]) * (sa*sw[o]) + bias[o]
+Integer accumulation is order-independent, so the C++ model matches the oracle exactly.
+Attention matmuls stay FP32.
 
-  1. weights_int8/  -- per-conv fake-quantized weights (BN folded in, then per-output-channel
-     symmetric INT8 quant-dequant baked into the float values) + folded bias + manifest_int8.txt
-     that carries each conv's per-tensor input-activation scale `sa`.
-  2. dumps_int8/<name>_python.bin -- per-layer activations of the SAME fake-quant model, the oracle
-     the C-sim must match at cosine ~ 1.0 (proves the C++ INT8 arithmetic is correct).
-
-Quantization scheme (the exact W8A8 integer dataflow a hand-written HLS kernel runs):
-  * BN folded into conv weights BEFORE quantizing:  Wf[o] = W[o] * (gamma[o]/sqrt(var[o]+eps)),
-    folded bias = beta - mean*scale (kept FP32).
-  * Weights: per-output-channel symmetric INT8, sw[o] = max|Wf[o]| / 127,  w_int = round(Wf/sw).
-  * Activations: per-tensor symmetric INT8, sa = max|x| / 127 (calibrated over N images),
-    x_int = clamp(round(x/sa), -127, 127).
-  * Conv accumulates the INTEGER products exactly:  acc[o] = sum_i x_int[i] * w_int[o,i]  (int32,
-    order-independent), then dequant+bias:  real[o] = acc[o] * (sa * sw[o]) + bias[o];  then act.
-    Accumulating integers (not dequantized floats) is what makes the C-sim bit-stable against this
-    oracle -- float conv reduction-order differences no longer get amplified by the hard rounding.
-  * Only conv inputs + conv weights are quantized. The attention block's internal q@k / softmax /
-    v@attn matmuls stay FP32 on BOTH sides (the qkv/proj/pe CONVS are quantized) -- a documented,
-    consistent boundary for this milestone; SmoothQuant-scale ingestion + attention-matmul quant are
-    the natural follow-ons (the per-conv sa machinery is exactly where SmoothQuant scales plug in).
-
-  conda run -n ueaod python hls/export/quantize_yolo26.py [n_calib]
+  python model_python/scripts/quantize_yolo26.py [n_calib]
 """
 import os
 import sys
@@ -53,14 +36,12 @@ VAL_IMAGES = "/workspace/ckarfa/projects/UOD/dataset/urpc 2018/val2018/images"
 EPS = 1e-3                                                        
 QMAX = 127                               
 
-
 def preprocess(path, size=640):
     im0 = cv2.imread(path)
     lb = LetterBox((size, size), auto=False, stride=32)
     im = lb(image=im0)[:, :, ::-1]                                 
     im = np.ascontiguousarray(im.transpose(2, 0, 1))               
     return torch.from_numpy(im.astype(np.float32) / 255.0).unsqueeze(0)
-
 
 def fold_bn(model):
     """Fold every ultralytics Conv's BN into its Conv2d (giving the conv a bias, bn->Identity).
@@ -88,7 +69,6 @@ def fold_bn(model):
             is_silu[name] = False                                                                
         quant_convs.append((name, mod))
     return quant_convs, is_silu
-
 
 def main():
     n_calib = int(sys.argv[1]) if len(sys.argv) > 1 else 128
@@ -206,7 +186,6 @@ def main():
     print(f"[quant] exported {len(quant_convs)} int8 convs + manifest -> {WINT8}")
     print(f"[quant] act-scale range: min={min(sa.values()):.3e} max={max(sa.values()):.3e} "
           f"(n_calib={len(imgs)})")
-
 
 if __name__ == "__main__":
     main()

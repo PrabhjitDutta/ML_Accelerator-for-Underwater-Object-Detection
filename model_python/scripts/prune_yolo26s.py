@@ -1,29 +1,15 @@
                       
-"""Structured (channel) pruning of a fine-tuned YOLO26s via torch_pruning.
+"""Structured channel pruning of a fine-tuned YOLO26s with torch_pruning.
 
-Analogous to htdet's tp recipe (configs/htdet/pruning_scripts/tp_prune_retinanet.py) but adapted to
-the Ultralytics DetectionModel, which needs three workarounds tp doesn't handle out of the box:
+Workarounds for the Ultralytics DetectionModel:
+  1. loaded checkpoints have requires_grad=False, which gives tp an empty graph: re-enable grad.
+  2. the Detect decode is untraceable: trace the conv-only Yolo26Trunk (shares the submodules).
+  3. tp's grouper loops forever on the attention blocks (layer 10 C2PSA, layer 22 C3k2): replace them
+     with channel-preserving pass-throughs while tracing, then restore.
+Protected: layer 10, layer 22, Detect (23) and SPPF's output conv. The rest is pruned at one global ratio.
+Saves the pickled pruned DetectionModel, so YOLO(path) reloads it without a .yaml.
 
-  1. A loaded YOLO checkpoint has requires_grad=False on every parameter -> no grad_fn -> tp's
-     autograd-based tracer builds an empty graph. We re-enable grad before tracing.
-  2. The Detect decode (anchors/dist2bbox/topk) is untraceable, so we trace the conv-only Yolo26Trunk
-     (which shares the same submodules -> pruning it mutates the real DetectionModel).
-  3. tp's get_all_groups() loops forever on YOLO26's attention blocks (C2PSA at layer 10 AND an
-     attention-carrying C3k2 at layer 22). We neutralize both attentions to channel-preserving
-     pass-throughs *only during tracing/pruning* (attention weights are never pruned anyway), then
-     restore the real modules. With attention out of the graph, tp's global grouper runs in <1s and
-     handles all BN / residual-add / concat / split coupling correctly.
-
-Protected (ignored_layers): layer 10 (C2PSA), the whole layer 22 (attention-carrying head C3k2), the
-Detect head (layer 23), and SPPF's output conv (pins the SPPF->C2PSA boundary so the restored C2PSA
-still fits). Everything else -- backbone + most of the neck -- is pruned at a single global ratio.
-
-Saves a reloadable Ultralytics checkpoint by pickling the pruned DetectionModel (its new channel
-counts live in the module, so YOLO(path) reconstructs the pruned arch without a .yaml).
-
-  conda run -n ueaod python training/yolo26s/prune_yolo26s.py \
-      --init final_models/fine_tuned_fp32/yolo26s_urpc2018_fp32.pt --ratio 0.3 \
-      --out training/yolo26s/runs/prune_r30/pruned_init.pt
+  python model_python/scripts/prune_yolo26s.py --init <fp32.pt> --ratio 0.3 --out <pruned_init.pt>
 """
 import argparse
 import datetime
@@ -46,7 +32,6 @@ SPPF_IDX = 9
 ATTN_HEAD_IDX = 22                                              
 MIN_KEEP = 8                                                        
 
-
 class PassThrough(nn.Module):
     """Channel-preserving stand-in for C2PSA during tracing; carries ultralytics routing attrs."""
     def __init__(self, f, i):
@@ -54,19 +39,14 @@ class PassThrough(nn.Module):
     def forward(self, x):
         return x
 
-
 class AttnIdentity(nn.Module):
     """Stand-in for a nested Attention submodule during tracing (channel-preserving)."""
     def forward(self, x):
         return x
 
-
 class RootMagnitudeImportance(tp.importance.Importance):
-    """Per-group channel importance = L2 magnitude of the group's ROOT conv weights only.
-
-    tp's stock GroupMagnitudeImportance mis-indexes coupled layers across YOLO26's concat/split
-    boundaries (IndexError: idx 192 vs size 128). Scoring from the root conv alone sidesteps that
-    while still letting MetaPruner.step() do the correct coupled pruning."""
+    """Group importance = L2 magnitude of the group's root conv weights only (tp's GroupMagnitudeImportance
+    mis-indexes across YOLO26's concat/split boundaries)."""
     def __call__(self, group, **kwargs):
         for dep, idxs in group:
             layer = dep.target.module
@@ -77,7 +57,6 @@ class RootMagnitudeImportance(tp.importance.Importance):
         dep, idxs = group[0]
         s = dep.target.module.weight.data.flatten(1).norm(dim=1)
         return s[torch.tensor(idxs)]
-
 
 def _neutralize_attn(model):
     """Swap layer-10 C2PSA -> PassThrough and every nested `.attn` -> AttnIdentity for tracing.
@@ -97,7 +76,6 @@ def _neutralize_attn(model):
             parent.attn = mod
     return restore
 
-
 def trunk_macs(model):
     """Conv-only FPGA-workload MACs. Traces with attention neutralized so tp's tracer terminates."""
     restore = _neutralize_attn(model)
@@ -106,7 +84,6 @@ def trunk_macs(model):
     finally:
         restore()
     return macs
-
 
 def prune(init, ratio, out):
     m = YOLO(str(init))
@@ -171,7 +148,6 @@ def prune(init, ratio, out):
         _ = m2.model.float().eval()(torch.randn(1, 3, 640, 640))
     print(f"[prune] reload OK via YOLO(): params={sum(p.numel() for p in m2.model.parameters())/1e6:.3f}M")
 
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--init", default=str(ROOT / "final_models/fine_tuned_fp32/yolo26s_urpc2018_fp32.pt"))
@@ -179,7 +155,6 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     prune(args.init, args.ratio, args.out)
-
 
 if __name__ == "__main__":
     main()

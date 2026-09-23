@@ -1,26 +1,13 @@
                       
-"""Phase 4: physically compact the pruned50 zeroed channels out of a C-sim weights dir.
+"""Physically remove pruned (all-zero) channels from a weights dir.
 
-Mask pruning (prune_yolo26s.py) zeros whole OUTPUT filters but keeps dense shapes, so the compute/BRAM
-win is only realized once a backend physically drops the dead channels. That is NOT a layer-local edit:
-a dead producer-output channel does not line up with any consumer-input channel, and YOLO26 couples
-channel dims through C3k2 split/concat, SPPF concat, and the C2PSA/PSABlock/Bottleneck residual adds.
+Walks the trunk wiring (mirrors yolo26_network.cpp) with per-channel provenance, so residual adds union
+their operands' live sets and every conv learns which input/output channels to keep. Slices weights,
+per-OC scales, per-IC smooth scales and bias; writes the compacted weights dir plus compaction_map.json.
+Only channels whose output is identically zero and that no residual add revives are dropped (lossless).
+attn.qkv inputs stay full width: attention() derives num_heads/head_dim from them.
 
-This builds the global channel-liveness dependency graph by walking the EXACT trunk wiring (mirroring
-csim/yolo26_trunk.cpp) with per-channel provenance, so residual adds union their operands' surviving
-sets and every conv learns which input/output channels to keep. It then physically slices every weight
-(and the SmoothQuant/INT8 per-OC scales, per-IC smooth scales, bias) and writes a compacted weights dir
-plus a compaction_map.json (compacted oc/ic per conv + per-split compacted split index for the C-sim).
-
-Losslessness: only channels whose filter is exactly zero AND that are not revived by a residual add are
-dropped, so the compacted graph computes bit-identically. Verified two ways: (a) re-expanding the
-compacted weights to dense reproduces the originals on kept channels and the dropped output filters were
-all-zero; (b) the rewired compacted C-sim matches the dense C-sim at cosine 1.0 (build_csim.sh).
-
-Attention head-reshape inputs (the C2PSA / layer-22 `*.attn.qkv.conv` inputs) are kept full width, since
-attention() derives num_heads/head_dim from that channel count.
-
-  conda run -n ueaod python hls/export/compact_yolo26.py [weights_dir]   # default hls/weights (FP32)
+  python model_python/scripts/compact_yolo26.py [weights_dir]
 """
 import os
 import sys
@@ -33,16 +20,12 @@ from ultralytics import YOLO
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
 
-
                                                                                                       
 class Compactor:
-    """Walks the 24-layer trunk carrying per-channel provenance to solve channel liveness.
-
-    A tensor is a list `prov` of length C; prov[i] = list of (conv_name, oc) that are ADDED at channel i
-    (one entry for a plain conv output, several after residual adds). keep_out[conv] is a bool[oc] that
-    starts as the conv's nonzero-filter mask and is unioned upward wherever a residual add revives a
-    channel. kept(t)[i] = OR over prov[i] of keep_out. After the walk keep_out is final; each conv's
-    keep_in is kept(its input tensor)."""
+    """Walks the trunk carrying per-channel provenance to solve channel liveness.
+    
+    prov[i] = list of (conv, oc) summed into channel i. keep_out[conv] starts as the nonzero-filter mask and
+    is unioned wherever a residual add revives a channel; keep_in = kept(input tensor)."""
 
                                                                                                     
                                                                                                       
@@ -238,7 +221,6 @@ class Compactor:
                 (self.head_box if "cv2" in root else self.head_cls)(root, i, f)
         return dumped
 
-
                                                                                                       
 def nonzero_masks(wdir, manifest_name, names):
     """bool[oc] per conv: an output filter is live iff not all-zero (dead filters == pruned channels)."""
@@ -250,7 +232,6 @@ def nonzero_masks(wdir, manifest_name, names):
         nz[n] = (np.abs(w).sum(axis=1) > 0)
     return nz
 
-
 def _read_manifest(wdir):
     for mn in ("manifest_sq.txt", "manifest_int8.txt", "manifest.txt"):
         p = os.path.join(wdir, mn)
@@ -259,7 +240,6 @@ def _read_manifest(wdir):
             return mn, rows
     raise FileNotFoundError(f"no manifest in {wdir}")
 
-
 def _oc_from_manifest(wdir, mn, name):
     for r in open(os.path.join(wdir, mn)):
         f = r.split()
@@ -267,17 +247,12 @@ def _oc_from_manifest(wdir, mn, name):
             return int(f[1])
     raise KeyError(name)
 
-
 def _act(v, act):
     return v / (1.0 + np.exp(-v)) if int(act) == 1 else v                                  
 
-
 def _fold_dw_constants(wdir, mn, row_by, comp, keep_out):
     """Fold each dropped dw channel's constant act(bias) into the consuming 1x1's bias.
-
-    A dw output channel whose input channel is dead still emits act(bias[o]) at every position. The
-    consumer is 1x1 with pad=0, so its contribution to output o' is the position-independent constant
-    sum_o w[o',o]*C[o] -- exactly a bias term. Returns {conv_name: new dense bias array}.
+    Returns {conv_name: new dense bias array}.
     """
     out = {}
     for dw, pw in Compactor.FOLD_PAIRS.items():
@@ -314,7 +289,6 @@ def _fold_dw_constants(wdir, mn, row_by, comp, keep_out):
             b += contrib
         out[pw] = b.astype("<f4")
     return out
-
 
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -421,7 +395,6 @@ def main():
           f"conv weights {tot_p1/1e6:.3f}M / {tot_p0/1e6:.3f}M ({100*(1-tot_p1/tot_p0):.1f}% smaller)")
     _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, comp.folded)
 
-
 def _write_manifest(wdir, outdir, mn, rows, cmap):
     out = []
     for r in rows:
@@ -434,14 +407,9 @@ def _write_manifest(wdir, outdir, mn, rows, cmap):
         out.append(" ".join(r))
     open(os.path.join(outdir, mn), "w").write("\n".join(out) + "\n")
 
-
 def _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, folded=frozenset()):
-    """Prove every dropped channel carried an identically-zero activation.
-
-    An output channel is safe to drop iff its response is identically 0 for ALL inputs, which needs
-    BOTH an all-zero filter AND an all-zero (BN-folded) bias -- a zeroed filter with a live bias is a
-    nonzero CONSTANT channel, which would make compaction lossy. Depthwise convs get the extra route
-    that their own input channel is dead, which zeroes the output regardless of the filter.
+    """Check every dropped channel's output is identically zero: all-zero filter AND all-zero bias, or
+    (depthwise) a dead input channel.
     """
     bad = 0
     for r in rows:
@@ -464,7 +432,6 @@ def _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, folded=froze
                 print(f"[verify] FAIL {n}: dropped a filter with nonzero bias (constant channel)"); bad += 1
     print(f"[verify] lossless check: "
           f"{'OK (every dropped channel is identically zero)' if bad == 0 else f'{bad} FAILURES'}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Bit-exact gate over ALL 100 kernel convs, each at its OWN input size in the real frame
-# (testbench/frame_conv_geometry.txt: conv name, spatial size). Stronger than run_kernel_gates.sh, which uses one
-# uniform size: a uniform size whose W was a multiple of 8 once hid a band-alignment bug on
-# 23.one2one_cv3.2.0.0 (W=20) that only this gate catches.
+# Bit-exact gate over all 100 kernel convs, each at its own input size in the real frame
+# (testbench/frame_conv_geometry.txt). Catches size-dependent bugs a uniform test size can hide.
 #   bash model_c/scripts/run_kernel_gate_all_convs.sh ["<extra -D flags>"]
-# Flags = the shipping set minus FX_DEQUANT/SILU_LUT (those replace the exact bar with a tolerance bar).
+# Flags = the shipping set minus FX_DEQUANT/SILU_LUT (those replace the exact bar with a tolerance).
 set -u
 M="$(cd "$(dirname "$0")/.." && pwd)"; cd "$M"
 case "$(uname -s)" in MINGW*|MSYS*) export PATH="/c/msys64/ucrt64/bin:$PATH";; esac

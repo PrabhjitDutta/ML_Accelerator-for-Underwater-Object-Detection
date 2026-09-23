@@ -1,56 +1,13 @@
 #!/usr/bin/env python3
-"""Detection-level C-sim vs PyTorch-oracle check -- the leg-A end-to-end gap.
+"""Detection-level check: decode the C++ model's and the PyTorch oracle's o2o head maps (one dumps dir,
+o2o_{0,1,2}_csim.bin / _python.bin) with the same Yolo26Trunk.decode() and diff the detection lists.
 
-The per-layer gate (compare_cosine.py) compares TENSORS; csim_eval_map.py compares AGGREGATE mAP over
-800 images. Neither answers the question in between: on one image, do the C-sim and the PyTorch integer
-oracle emit the same DETECTIONS? Nothing in the harness answered it, because decode_check.py always
-anchors its reference on a live FP32 PyTorch forward -- pointing it at an INT8 dump measures
-quantization COST (oracle-vs-FP32), not implementation FIDELITY (C-sim-vs-oracle).
+  python model_c/export/compare_dets.py <dumps_dir> [--conf 0.001] [--tol 1e-2]
 
-This script closes that gap. It reads BOTH head-map sets out of one dumps dir --
-  o2o_{0,1,2}_csim.bin    (the C++ C-sim)
-  o2o_{0,1,2}_python.bin  (the PyTorch integer oracle)
--- pushes each through the SAME unchanged Yolo26Trunk.decode(), and diffs the two detection lists
-against each other. Decode is identical on both branches, so every difference is attributable to the
-trunk. That is the same isolation logic decode_check.py uses, with the reference moved from FP32
-PyTorch to the oracle.
-
-  conda run -n ueaod python hls/export/compare_dets.py hls/dumps_sq
-  conda run -n ueaod python hls/export/compare_dets.py hls/dumps_sq --conf 0.001 --tol 1e-2
-
-Why this matters at all: on the SmoothQuant path the head maps agree at cosine ~0.9995, NOT 1.0. They
-genuinely differ. A couple of borderline detections can therefore land on opposite sides of the
-confidence threshold, and mAP's 0.0004 aggregate agreement over 800 images cannot see it -- two models
-can score identical mAP while disagreeing on every single image.
-
-Detections are paired by IoU, NOT by rank. This is the whole difficulty of the comparison and it is
-worth being precise about why, because the neighbouring scripts pair by rank and are right to.
-
-decode_ref.py compares two decodes of the SAME head maps, so scores agree to ~5e-7 and rank order is
-stable; there, sorting by score and walking rows in parallel is correct, and its only hazard is an
-exact TIE ordered differently by torch.topk vs std::partial_sort (which once manufactured a 633-PIXEL
-box difference on img1 out of two identical detection sets merely permuted -- fixed with a geometric
-tiebreak in the comparator, not in decode.h).
-
-Here the head maps genuinely DIFFER (cosine ~0.9995), so scores move by up to ~0.09 and the ranking
-itself changes. That breaks rank pairing outright, not just at ties: measured on hls/dumps_sq, the two
-sides hold the identical 12 objects with boxes agreeing to ~0.3 px, yet rank pairing reports
-max|dbox| = 175 px purely because ranks 1<->2 and 5<->6 swapped. A score-sorted comparator cannot fix
-this, because the sort key is the very quantity under test.
-
-So detections are matched greedily by IoU (highest first, each detection claimed once). Class
-disagreement is REPORTED on matched pairs rather than used for matching, so a genuine class flip
-surfaces as a finding instead of silently splitting one object into two unmatched ones.
-
-Unmatched detections are NAMED, never silently truncated. decode_check.py's `n = min(len(a), len(b))`
-means that when one side emits fewer detections, the missing one is absent from the diff entirely --
-the very case you most want to see (Phase 2: oracle 5, C-sim 4, and the max-abs line said nothing at
-all about the detection that vanished).
-
-DEFAULT IS REPORT-ONLY. No --tol means no pass/fail: the expected C-sim-vs-oracle detection divergence
-has never been measured, so inventing a threshold before the first measurement would be a gate written
-against a guess. Pass --tol to turn it into a gate once you know the floor. A run that compared
-NOTHING always fails, in every mode.
+Detections are paired greedily by IoU, not by rank: when the head maps differ slightly, scores move and
+the ranking changes, so rank pairing would report false box errors. Class disagreement is reported on
+matched pairs; unmatched detections are listed. Without --tol the script only reports; a run that
+compared nothing always fails.
 """
 import argparse
 import os
@@ -60,31 +17,23 @@ import numpy as np
 
 SHAPES = [(8, 80, 80), (8, 40, 40), (8, 20, 20)]
 
-# Resolve repo-relative FIRST, then fall back to the server absolute path. The other export scripts
-# hardcode /workspace/... which makes them server-only; this one runs from a checkout too, so the
-# comparator can be exercised wherever the dumps and the checkpoint happen to live.
+# Resolve paths repo-relative first, then fall back to the server absolute path.
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 _SERVER = "/workspace/ckarfa/projects/UOD"
-
 
 def _resolve(rel):
     local = os.path.join(_ROOT, *rel.split("/"))
     return local if os.path.exists(local) else f"{_SERVER}/{rel}"
 
-
 CKPT = _resolve("final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt")
 TRUNK_PATH = _resolve("training/yolo26s")
 
-
 def canon(a):
-    """Canonical detection order: score desc, then class, then box geometry.
-
-    The geometric tiebreak is load-bearing -- see the module docstring's 633 px incident.
+    """Canonical detection order: score desc, then class, then box geometry (so ties align).
     """
     if not len(a):
         return a
     return a[np.lexsort((a[:, 3], a[:, 2], a[:, 1], a[:, 0], a[:, 5], -a[:, 4]))]
-
 
 def decode_side(dump_dir, suffix, trunk, conf):
     """Run the unchanged Yolo26Trunk.decode on one side's o2o head maps."""
@@ -99,19 +48,15 @@ def decode_side(dump_dir, suffix, trunk, conf):
         want = int(np.prod(s))
         if a.size != want:
             raise ValueError(f"{p}: {a.size} floats, expected {want} for shape {s}")
-    # decode() splits 2*nl entries (o2m then o2o); the o2m half is unused by the one2one inference
-    # decode, so feed the o2o maps into those slots to satisfy the shape contract. Same trick as
-    # decode_ref.py -- and safe precisely BECAUSE o2m is dead on this path.
+    # decode() expects 2*nl maps (o2m then o2o); o2m is unused by the o2o decode, so reuse the o2o maps.
     maps = [torch.from_numpy(a.copy()) for a in o2o] * 2
     with torch.no_grad():
         det = trunk.decode(tuple(maps))[0].cpu().numpy()
     return det[det[:, 4] >= conf]
 
-
 def fmt(d):
     return (f"cls{int(d[5])} conf={d[4]:.4f} "
             f"box=[{d[0]:.1f},{d[1]:.1f},{d[2]:.1f},{d[3]:.1f}]")
-
 
 def iou_matrix(a, b):
     """Pairwise IoU between two [N,6] and [M,6] detection arrays (boxes in cols 0..3, xyxy)."""
@@ -127,14 +72,9 @@ def iou_matrix(a, b):
     union = area_a + area_b - inter
     return np.where(union > 0, inter / np.maximum(union, 1e-12), 0.0)
 
-
 def match_by_iou(a, b, iou_thr):
-    """Greedy highest-IoU-first pairing. Returns (pairs, unmatched_a_idx, unmatched_b_idx).
-
-    Greedy-by-IoU is the standard detection-set correspondence and is deterministic here: pairs are
-    ordered by IoU descending with index tiebreaks, so the result does not depend on input order.
-    Matching ignores class deliberately -- a class flip should be REPORTED on a matched pair, not
-    turned into two unmatched detections that hide the fact that both sides found the same object.
+    """Greedy highest-IoU-first pairing, ties broken by index. Returns (pairs, unmatched_a_idx,
+    unmatched_b_idx). Class is ignored so a class flip shows up on a matched pair.
     """
     M = iou_matrix(a, b)
     pairs = []
@@ -150,7 +90,6 @@ def match_by_iou(a, b, iou_thr):
     ua = [i for i in range(len(a)) if i not in used_a]
     ub = [j for j in range(len(b)) if j not in used_b]
     return pairs, ua, ub
-
 
 def report(a, b, name_a, name_b, tol, iou_thr=0.5):
     """Diff two detection sets by IoU correspondence. Returns (ok, n_matched)."""
@@ -173,9 +112,7 @@ def report(a, b, name_a, name_b, tol, iou_thr=0.5):
     dscore = float(np.abs(a[ia, 4] - b[ib, 4]).max())
     dbox = float(np.abs(a[ia, :4] - b[ib, :4]).max())
     min_iou = min(p[2] for p in pairs)
-    # Rank agreement is reported but NEVER gated: the two sides' scores differ by construction, so a
-    # rank swap between two near-equal detections is expected and harmless. It is surfaced only
-    # because a rank-pairing comparator would have blamed the box for it.
+    # Rank agreement is reported, never gated: near-equal scores may swap.
     rank_swaps = int((ia != ib).sum())
 
     print(f"\n  matched pairs    : {len(pairs)}  (IoU >= {iou_thr}, worst matched IoU {min_iou:.4f})")
@@ -185,9 +122,7 @@ def report(a, b, name_a, name_b, tol, iou_thr=0.5):
     if rank_swaps:
         print(f"  rank swaps       : {rank_swaps}  (score reordering, not a box error -- not gated)")
 
-    # Name what the pairing could not account for. This is the case decode_check.py's
-    # `n = min(len(a), len(b))` drops on the floor (Phase 2: oracle 5, C-sim 4, and the max-abs line
-    # said nothing about the detection that vanished).
+    # List detections the pairing could not match.
     for idx, arr, nm in ((ua, a, name_a), (ub, b, name_b)):
         if not idx:
             continue
@@ -196,10 +131,7 @@ def report(a, b, name_a, name_b, tol, iou_thr=0.5):
             print(f"       {fmt(arr[i])}")
         if len(idx) > 10:
             print(f"       ... and {len(idx) - 10} more")
-        # The confidence of an unmatched detection separates a threshold artifact from a real bug:
-        # near the conf cutoff it is a borderline detection tipping over; far above it, something is
-        # actually wrong. Phase 2 assumed the former and never checked; Phase 5 hit the same symptom
-        # at conf 0.77 and it was a genuine per-channel FakeQuantize bug.
+        # An unmatched detection near the conf cutoff is a borderline flip; far above it, a real bug.
         print(f"     lowest unmatched confidence: {float(arr[idx][:, 4].min()):.4f}"
               f"   (vs the --conf cutoff: near it => threshold artifact, far above => real bug)")
 
@@ -211,12 +143,8 @@ def report(a, b, name_a, name_b, tol, iou_thr=0.5):
     print(f"\nRESULT: {'PASS' if ok else 'FAIL'}   (tol = {tol:g})")
     return ok, len(pairs)
 
-
 def selftest():
-    """Exercise the comparator on synthetic data -- no torch, no dumps, no checkpoint.
-
-    The decode itself is borrowed unchanged from the shipping harness; what is NEW here is the
-    comparator, so that is what gets tested. Runs anywhere numpy does.
+    """Self-test of the comparator on synthetic data (numpy only).
     """
     base = np.array([
         [10., 10., 50., 50., 0.90, 1],
@@ -231,16 +159,14 @@ def selftest():
     if not (ok and n == 4):
         fails.append("identical inputs did not pass")
 
-    # 2. a TIE permuted between the two sides must still pass -- this is the 633 px trap
+    # 2. a tie permuted between the two sides must pass
     print()
     perm = base[[0, 2, 1, 3]].copy()
     ok, _ = report(base, perm, "A", "B(tie permuted)", tol=1e-6)
     if not ok:
         fails.append("permuted score tie was reported as a difference (canonical sort is broken)")
 
-    # 3. a RANK SWAP from genuinely shifted scores must still pass. Same objects, same boxes, but the
-    # scores moved enough to reorder the list -- measured for real on hls/dumps_sq, where rank pairing
-    # turned a 0.3 px agreement into a 175 px "failure". IoU matching must be immune to it.
+    # 3. a rank swap from shifted scores must pass (same boxes)
     print()
     swapped = base.copy()
     swapped[1, 4] = 0.75
@@ -249,7 +175,7 @@ def selftest():
     if not ok:
         fails.append("rank swap from shifted scores was reported as a box error (IoU matching broken)")
 
-    # 3. a real class flip must fail
+    # 4. a class flip must fail
     print()
     flipped = base.copy()
     flipped[0, 5] = 3
@@ -257,13 +183,13 @@ def selftest():
     if ok:
         fails.append("class flip was not caught")
 
-    # 4. a count mismatch must fail AND name the unmatched detection
+    # 5. a count mismatch must fail and name the unmatched detection
     print()
     ok, _ = report(base, base[:3].copy(), "A", "B(one short)", tol=1e-6)
     if ok:
         fails.append("count mismatch was not caught")
 
-    # 5. report-only mode must not claim a pass/fail on a real difference
+    # 6. report-only mode must not claim pass/fail
     print()
     ok, _ = report(base, flipped, "A", "B(class flipped)", tol=None)
     if not ok:
@@ -276,7 +202,6 @@ def selftest():
         return 1
     print("SELFTEST PASS -- comparator handles ties, class flips, and count mismatches.")
     return 0
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -318,7 +243,6 @@ def main():
     print(f"dumps: {os.path.abspath(args.dump_dir)}   conf >= {args.conf}\n")
     ok, n = report(a, b, f"[{args.a}]", f"[{args.b}]", args.tol, args.iou)
     sys.exit(0 if (ok and n) else 2)
-
 
 if __name__ == "__main__":
     main()

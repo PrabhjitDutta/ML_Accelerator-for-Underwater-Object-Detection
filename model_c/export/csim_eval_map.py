@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""Score the actual C-simulation over val2018 with pycocotools.
+"""Score the C++ model over val2018 with pycocotools, running the binary on every image.
+Preprocessing and decode match sq_eval_map.py (LetterBox, one2one Yolo26Trunk.decode).
 
-Phases 1-3 scored the PyTorch *oracle* (which the C-sim matches per-layer), because running the C++
-over the whole val set is slow. The constant-folding variant is a weights transformation that only
-exists on the C-sim side, so it has to be scored by really running the C++ binary on every image.
-
-Preprocessing and decode are byte-identical to sq_eval_map.py (same LetterBox, same host-side
-Yolo26Trunk.decode over the one2one head, same conf/scale_boxes), so the numbers are directly
-comparable to the 0.7332 oracle / 0.7546 OpenVINO references.
-
-  conda run -n ueaod python hls/export/csim_eval_map.py <weights_dir> [--limit N] [--cpp_decode]
+  python model_c/export/csim_eval_map.py <weights_dir> [--limit N] [--cpp_decode]
 """
 import argparse
 import os
@@ -27,7 +20,7 @@ from ultralytics.data.augment import LetterBox
 from ultralytics.utils.ops import scale_boxes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# UOD_ROOT: the project root. Default is the server; set it to run anywhere else (e.g. the Windows PC).
+# UOD_ROOT: the project root (defaults to the server path).
 ROOT = os.environ.get("UOD_ROOT", "/workspace/ckarfa/projects/UOD")
 sys.path.insert(0, os.path.join(ROOT, "training/yolo26s"))
 from yolo26_trunk import Yolo26Trunk  # noqa: E402
@@ -37,20 +30,15 @@ BASE = os.path.join(ROOT, "dataset/urpc 2018")
 GT = os.path.join(BASE, "annotations/instances_val2018.json")
 IMG = os.path.join(BASE, "val2018/images")
 CKPT = os.path.join(ROOT, "final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt")
-# heads-only build: skips the ~40 MB/image of intermediate layer dumps that decode never
-# reads (verified byte-identical head maps). ~4x faster over a whole val pass.
-# YOLO26_CSIM_BIN overrides which binary is scored -- set it to build/yolo26_csim_deploy to score the
-# deployment shape (one2many head compiled out). That build emits no o2m_* dumps, so it REQUIRES
-# --cpp_decode; the Python-decode path below reads both tags and would fail on the missing files.
+# Heads-only build: skips intermediate dumps decode never reads.
+# YOLO26_CSIM_BIN overrides the binary; the deploy build (no o2m head) requires --cpp_decode.
 CSIM = os.environ.get("YOLO26_CSIM_BIN") or os.path.join(HERE, "..", "build", "yolo26_csim")
-DECODE = os.path.join(HERE, "..", "build", "decode_test")   # C++ (ARM-PS) one2one decoder, decode.h
+DECODE = os.path.join(HERE, "..", "build", "decode_test")   # C++ one2one decoder (detection_decode.h)
 SHAPES = [(8, 80, 80), (8, 40, 40), (8, 20, 20)]
 
-
 def cpp_decode(tmp, conf):
-    """Run the standalone C++ decoder (decode.h via decode_test) on the head-map dumps the C-sim just
-    wrote, and return dets as [N,6] = x1,y1,x2,y2,score,cls -- identical layout to Yolo26Trunk.decode's
-    numpy output, so the downstream conf-filter/scale_boxes/COCO-format code is shared byte-for-byte."""
+    """Run the C++ decoder on the head-map dumps; returns [N,6] = x1,y1,x2,y2,score,cls, the same layout
+    as Yolo26Trunk.decode."""
     out = os.path.join(tmp, "cpp_dets.txt")
     subprocess.run([DECODE, tmp, out], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -63,14 +51,12 @@ def cpp_decode(tmp, conf):
                 rows.append([x1, y1, x2, y2, s, cls])
     return np.array(rows, dtype=np.float32).reshape(-1, 6)
 
-
 def preprocess(path, size=640):
     im0 = cv2.imread(path)
     lb = LetterBox((size, size), auto=False, stride=32)
     im = lb(image=im0)[:, :, ::-1]
     im = np.ascontiguousarray(im.transpose(2, 0, 1))
     return (im.astype(np.float32) / 255.0), im0.shape[:2]
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -94,7 +80,6 @@ def main():
         paths = paths[:args.limit]
 
     results, eval_ids = [], []
-    # ~5 MB of head-map dumps per run; this used to leak one dir per invocation into /tmp.
     tmp = tempfile.mkdtemp(prefix="csim_eval_")
     try:
         run_eval(tmp, paths, stem2id, wdir, args, trunk, conf, results, eval_ids)
@@ -108,7 +93,6 @@ def main():
     print(f"[csim-eval] over {len(eval_ids)} val2018 images: mAP={ev.stats[0]:.4f} "
           f"mAP50={ev.stats[1]:.4f} mAP75={ev.stats[2]:.4f}")
     print("[csim-eval] references: SmoothQuant oracle mAP50=0.7332, deployed OpenVINO mAP50=0.7546")
-
 
 def run_eval(tmp, paths, stem2id, wdir, args, trunk, conf, results, eval_ids):
     from concurrent.futures import ThreadPoolExecutor
@@ -128,9 +112,7 @@ def run_eval(tmp, paths, stem2id, wdir, args, trunk, conf, results, eval_ids):
         subprocess.run([CSIM, wdir, inbin, wt], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        env={**os.environ, "YOLO26_HEADS_ONLY": "1",
-                            # ultralytics sets OMP_NUM_THREADS=1 at import time to stop ITS
-                            # workers oversubscribing. Inheriting that pins the OpenMP C-sim to
-                            # a single core of 48 -- ~15 s/image instead of ~2.5 s.
+                            # ultralytics sets OMP_NUM_THREADS=1 at import; override it so the OpenMP binary uses all cores.
                             "OMP_NUM_THREADS": omp})
         with torch.no_grad():
             if args.cpp_decode:

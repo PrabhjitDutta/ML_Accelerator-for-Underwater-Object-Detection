@@ -1,9 +1,5 @@
-// detection_decode_test.cpp -- standalone validation harness for detection_decode.h.
-// Reads the three one2one head maps (o2o_{0,1,2}_csim.bin, float32 LE) from a dump dir, runs the
-// dependency-free C++ decode, and writes detections to <out> as: "cls score x1 y1 x2 y2" per line.
-// Compared bit-against the ultralytics Python decode by decode_ref.py.
-//   g++ -O3 -std=c++17 detection_decode_test.cpp -o decode_test
-//   ./decode_test <dump_dir> <out.txt>
+// Runs detection_decode.h on the three o2o_{0,1,2}_csim.bin maps in <dump_dir>.
+//   ./decode_test <dump_dir> <out.txt>     out: "cls score x1 y1 x2 y2" per line
 #include "../reference_model/detection_decode.h"
 #include <cstdio>
 #include <cstdlib>

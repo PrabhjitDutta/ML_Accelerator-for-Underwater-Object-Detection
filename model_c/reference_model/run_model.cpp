@@ -1,11 +1,8 @@
-// run_model.cpp - C-simulation driver. Loads BN-folded weights, reads the shared input.bin, runs the
-// trunk, and dumps every layer output for cosine comparison against PyTorch.
-//   ./yolo26_csim <weights_dir> <input.bin> <dump_dir>
-//   ./yolo26_csim <weights_dir> - <out_dir>     frame loop: input.bin paths on stdin, one per line. Weights load
-//     (and, on the board, pack) once; each frame is decoded in-process (detection_decode.h) to <out_dir>/<stem>.txt
-//     ("cls score x1 y1 x2 y2" per line, 640-input pixels, as decode_test) - no map files, no Python.
-//     An input may also be a .u8 file: the same frame as 3*640*640 bytes k, value k/255.f - input.bin holds exactly
-//     those floats (board_host/frames_to_u8.py converts and checks). A quarter of the read; the board packs 0.conv by table.
+// Reference-model driver.
+//   ./yolo26_csim <weights_dir> <input.bin> <dump_dir>   one frame, dump every layer
+//   ./yolo26_csim <weights_dir> - <out_dir>              frame loop: input paths on stdin, detections to
+//                                                        <out_dir>/<stem>.txt ("cls score x1 y1 x2 y2")
+// An input is either input.bin (float32 3x640x640) or .u8 (the same frame as bytes k, value k/255.f).
 #include <chrono>
 #include <cstdio>
 #include <future>
@@ -16,9 +13,7 @@
 #include "layer_ops.h"
 #include "detection_decode.h"
 
-// The loader and the dumper throw on a bad weights dir / unwritable dump dir. Catching here turns an
-// abort+core-dump into a clean "[csim] error: ..." and exit 1, which is what the eval harness (which
-// runs this per image under subprocess check=True) can actually report.
+// Turn loader/dumper exceptions into an error message and exit 1.
 static int run(int argc, char** argv);
 
 int main(int argc, char** argv) {
@@ -48,7 +43,7 @@ static int run(int argc, char** argv) {
             auto u = std::make_shared<std::vector<uint8_t>>(n);
             FILE* f = std::fopen(p.c_str(), "rb");
             if (!f) throw std::runtime_error("cannot open " + p);
-            const size_t got = std::fread(u->data(), 1, n + 1, f);   // n + 1: a longer file is caught too
+            const size_t got = std::fread(u->data(), 1, n + 1, f);   // n + 1: detects a longer file
             std::fclose(f);
             if (got != n) throw std::runtime_error(p + ": " + std::to_string(got) + " bytes, expected 3*640*640");
             float tab[256];
@@ -63,14 +58,13 @@ static int run(int argc, char** argv) {
             throw std::runtime_error(p + ": " + std::to_string(raw.size()) + " floats, expected 3*640*640");
         Tensor t(3, 640, 640, NoInit());
         t.d.assign(raw.begin(), raw.end());
-        y26_input_u8(t.d.data(), nullptr);         // storage reused from an earlier .u8 frame: not that frame
+        y26_input_u8(t.d.data(), nullptr);         // storage reused from an earlier .u8 frame
         return t;
     };
     if (inbin == "-") {
         using clk = std::chrono::steady_clock;
         auto ms = [](clk::time_point a, clk::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-        // Frame N+1's input is read on another thread while frame N runs, so `read` is only the wait for it.
-        // It holds one more 4.9 MB tensor in the arena (peak ~50 -> ~55 MB of 64; a full arena spills to the heap).
+        // The next frame is read on another thread while this one runs.
         auto next_path = [](std::string& p) {
             while (std::getline(std::cin, p)) {
                 if (!p.empty() && p.back() == '\r') p.pop_back();
@@ -89,7 +83,7 @@ static int run(int argc, char** argv) {
             more = next_path(pn);
             if (more) pending = std::async(std::launch::async, load, pn);
             const auto t1 = clk::now();
-            y26_board_weights(W);                  // code-mode edges (-DY26_YQ8 + Y26_YQ=1): no dumps in this loop
+            y26_board_weights(W);
             const std::vector<Tensor> o = run_trunk(W, input, "");
             const auto t2 = clk::now();
             const auto dets = yolo26::decode_o2o(o[0].d.data(), o[1].d.data(), o[2].d.data(), o[0].C - 4, 300);

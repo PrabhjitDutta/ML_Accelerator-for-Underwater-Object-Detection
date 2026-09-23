@@ -1,18 +1,7 @@
-// silu_lut.h - GENERATED, do not edit by hand.
-//
-// SiLU(x) = x / (1 + exp(-x)) tabulated over [-16, 16] at 1024 intervals, as RAW fixed-point
-// integers with 24 fractional bits - chosen to match y26_fx_t (ap_fixed<{Y26_FX_W},{Y26_FX_I}>) exactly, so a
-// table entry can be assigned straight into `.V` with no shift, multiply or rounding step.
-//
-// Stored as plain `int` literals ON PURPOSE. ap_fixed's constructor from double is not a constant
-// expression, so an ap_fixed[] initializer would make HLS emit RUNTIME initialization logic instead
-// of inferring a ROM. Integer literals infer a ROM.
-//
-// Accuracy (measured by the generator, not estimated):
-//   worst linear-interpolation error : 6.104e-05  (at x = -0.016)
-//   truncation beyond +/-16          : silu(x)-x < 1.8e-06 above, |silu(x)| < 1.8e-06 below
-// Both are below the ap_fixed<48,24> dequant's own worst absolute deviation (1.5e-4), so the LUT is
-// not the dominant error term. It is still NOT bit-exact - gate it with tb_s2, never tb_s1.
+// GENERATED, do not edit by hand.
+// SiLU(x) over [-16, 16] at 1024 intervals, as raw fixed-point ints with 24 fractional bits (matching y26_fx_t),
+// so an entry assigns straight into `.V`. Plain int literals so HLS infers a ROM; an ap_fixed[] initializer
+// would build runtime init logic. Linear interpolation, so not bit-exact against float SiLU.
 #pragma once
 #define Y26_SILU_N   1024
 #define Y26_SILU_LO  (-16.0f)

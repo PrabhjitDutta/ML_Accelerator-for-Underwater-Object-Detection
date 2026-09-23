@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 3 accuracy check: run the SmoothQuant integer ORACLE (the exact arithmetic the C-sim was
-validated against at cosine >= 0.9994) over val2018 and score it with pycocotools, to confirm the
-ingested scales reproduce the deployed OpenVINO model's ~0.7546 mAP50.
+"""Score the SmoothQuant integer oracle (per-layer equivalent of the C++ model) over val2018 with
+pycocotools, decoding the one2one head on the host.
 
-The oracle == C-sim (per-layer gate), so the oracle's mAP is the C-sim's mAP without having to run the
-slow C++ over the whole val set. Decode is the host-side one2one path (trunk.decode), exactly the
-PL/PS split the accelerator will use.
-
-  conda run -n ueaod python hls/export/sq_eval_map.py [--limit N]
+  python model_c/export/sq_eval_map.py [--limit N]
 """
 import os
 import sys
@@ -28,7 +23,6 @@ BASE = "/workspace/ckarfa/projects/UOD/dataset/urpc 2018"
 GT = os.path.join(BASE, "annotations/instances_val2018.json")
 IMG = os.path.join(BASE, "val2018/images")
 
-
 def preprocess(path, size=640):
     im0 = cv2.imread(path)
     lb = LetterBox((size, size), auto=False, stride=32)
@@ -37,9 +31,7 @@ def preprocess(path, size=640):
     x = torch.from_numpy(im.astype(np.float32) / 255.0).unsqueeze(0)
     return x, im0.shape[:2]                               # (H0, W0)
 
-
 IRXML = "/workspace/ckarfa/projects/UOD/final_models/pruned50/int8_smoothquant_openvino_model/best.xml"
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -93,7 +85,6 @@ def main():
     print(f"\n[sq-eval] SmoothQuant oracle over {len(eval_ids)} val2018 images: "
           f"mAP={ev.stats[0]:.4f} mAP50={ev.stats[1]:.4f} mAP75={ev.stats[2]:.4f}")
     print("[sq-eval] deployed OpenVINO SmoothQuant reference: mAP50=0.7546")
-
 
 if __name__ == "__main__":
     main()

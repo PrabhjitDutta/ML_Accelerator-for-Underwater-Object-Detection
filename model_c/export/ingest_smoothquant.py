@@ -1,32 +1,17 @@
 #!/usr/bin/env python3
-"""Phase 3: ingest the *deployed* SmoothQuant INT8 scales from the OpenVINO IR and drive the same
-C-sim with them, to reproduce the deployed ~0.7546-mAP model (vs Phase 2's hand-rolled max-abs PTQ).
+"""Build SmoothQuant INT8 weights for the C++ model from the OpenVINO IR, plus a PyTorch integer oracle.
 
-Unlike Phase 2, SmoothQuant is NOT a drop-in for the symmetric per-tensor `sa`. Verified from the IR
-(final_models/pruned50/int8_smoothquant_openvino_model/best.{xml,bin}):
-  * every conv input carries a per-INPUT-channel smooth scale `ssc` (nncf_smooth_quant/scale [1,IC,1,1]),
-  * activations are ASYMMETRIC uint8 (FakeQuantize levels=256, in_low<0 for 99/100 convs),
-  * weights are per-OUTPUT-channel symmetric int8 (i8 Const -> Convert -> Multiply by sw [OC,1,1,1]).
+The IR has a per-input-channel smooth scale ssc, asymmetric uint8 activations and per-output-channel
+symmetric int8 weights. Integer dataflow (attention matmuls stay FP32):
+    X_s[i] = X[i] * ssc[i]
+    q[i]   = clamp(round((X_s[i] - lo)/step), 0, 255),  step = (hi-lo)/255
+    Y[o]   = sw[o] * (step * sum_i w_int[o,i]*q[i] + lo * sum_valid w_int[o,i]) + bias[o]
 
-The exact integer W8A8 dataflow a hand-written HLS kernel runs (attention interior stays FP32, like
-Phase 2):
-    X_s[i]   = X[i] * ssc[i]                                  # per-input-channel smooth pre-scale
-    q[i]     = clamp(round((X_s[i] - lo)/step), 0, 255)       # asymmetric uint8, step=(hi-lo)/255
-    Y[o]     = (sw[o]*step) * sum_i w_int[o,i]*q[i]  +  bias_eff[o]
-    bias_eff[o] = bias[o] + sw[o]*lo*sum_i w_int[o,i]         # zero-point correction folded into bias
-`sum w_int*q` is exact int32. This reuses the C-sim's existing dequant shape `sa*wsc[oc]` (sa:=step)
-and bias plumbing (b:=bias_eff); the only genuinely new inputs are per-IC `ssc` and per-tensor `lo`.
+Writes weights_sq/ (int8 weights, sw, ssc, bias, manifest_sq.txt) and dumps_sq/<name>_python.bin
+(oracle activations). IR node `__module.model.<path>/aten::_convolution/Convolution` maps to conv
+`<path>`. The one2many head convs are not in the IR and are exported as FP32 (qmode=0).
 
-Produces, mirroring quantize_yolo26.py:
-  1. weights_sq/  -- per-conv int8 weights + sw + ssc + bias_eff + manifest_sq.txt (qmode/sa/lo cols).
-  2. dumps_sq/<name>_python.bin -- per-layer activations of a PyTorch integer oracle built the SAME
-     way, the arithmetic reference the C-sim must match (compare_cosine.py hls/dumps_sq 0.99).
-
-IR node `__module.model.<path>/aten::_convolution/Convolution` maps 1:1 to C-sim conv name `<path>`.
-The IR deploys the one2one (end2end) head only, so the ~24 one2many head convs (23.cv2.*/23.cv3.*)
-have no IR entry -> exported as FP32 (qmode=0, BN-folded from the .pt) and are unused by the o2o decode.
-
-  conda run -n ueaod python hls/export/ingest_smoothquant.py
+  python model_c/export/ingest_smoothquant.py
 """
 import os
 import re
@@ -54,8 +39,6 @@ EPS = 1e-3        # ultralytics BatchNorm2d eps (for the FP32-fallback one2many 
 _ET = {"i8": np.int8, "u8": np.uint8, "i32": "<i4", "i64": "<i8",
        "f16": "<f2", "f32": "<f4", "f64": "<f8"}
 
-
-# ----------------------------- OpenVINO IR parsing --------------------------------------------------
 class IR:
     """Minimal opset1 IR reader: id->layer, type, name, edge maps, and const-tensor bytes."""
 
@@ -86,34 +69,22 @@ class IR:
     def convs(self):
         return [i for i, t in self.T.items() if t in ("Convolution", "GroupConvolution")]
 
-
 def cname(irname):
     m = re.match(r"__module\.model\.(.*?)/aten", irname)
     return m.group(1) if m else None
 
-
-# ----------------------------- attention-interior FakeQuantize ---------------------------------------
-# Phase 5. The IR quantizes FIVE tensors inside each Attention block; Phase 3 modelled none of them.
-# Keyed by the IR node suffix, in the order they are consumed:
-#   q     aten::mul/Multiply_1/fq_output_0    q*scale  (OV scales q BEFORE the matmul, then quantizes;
-#                                             ultralytics' source scales AFTER -- same math, but the
-#                                             quantization boundary lands in a different place, so the
-#                                             oracle must be restructured to scale-then-quantize)
-#   k     aten::matmul/MatMul/fq_input_1      k        (q@k operand)
-#   sm    aten::softmax/Softmax/fq_output_0   softmax probabilities (unsigned, lo=0)
-#   v_mm  aten::matmul/MatMul_1/fq_input_0    v as the v@attn^T operand
-#   v_pe  aten::reshape/Reshape/fq_input_0    v as the pe(v) operand
-# v_mm and v_pe quantize the SAME tensor with SEPARATELY calibrated ranges (NNCF calibrates per
-# consumer), so they must stay distinct. v_pe is why Phase 3's "attn.pe input is a non-requantized
-# Reshape" was wrong: the FakeQuantize sits one node UPSTREAM of the reshape that feeds pe, so a
-# port-0 lookup from the conv sees only the Reshape and concludes there is no input quantizer.
+# The five attention-interior quantizers in the IR, keyed by node suffix, in consumption order:
+#   q     q*scale (OV scales q before the matmul, then quantizes)
+#   k     q@k operand
+#   sm    softmax output (lo=0)
+#   v_mm  v as the v@attn^T operand
+#   v_pe  v as the pe(v) operand; same tensor as v_mm, separately calibrated range
 ATTN_FQ = {"q": "aten::mul/Multiply_1/fq_output_0",
            "k": "aten::matmul/MatMul/fq_input_1",
            "sm": "aten::softmax/Softmax/fq_output_0",
            "v_mm": "aten::matmul/MatMul_1/fq_input_0",
            "v_pe": "aten::reshape/Reshape/fq_input_0"}
 ATTN_KEYS = ["q", "k", "sm", "v_mm", "v_pe"]
-
 
 def parse_attn_fq(ir):
     """block prefix (e.g. '10.m.0.attn') -> {key: (lo, hi)} for the 5 attention-interior quantizers."""
@@ -132,7 +103,7 @@ def parse_attn_fq(ir):
         hi = float(ir.const(ir.src[(lid, "2")][0]).reshape(-1)[0])
         ol = float(ir.const(ir.src[(lid, "3")][0]).reshape(-1)[0])
         oh = float(ir.const(ir.src[(lid, "4")][0]).reshape(-1)[0])
-        # in==out ranges means this is a plain fake-quant (no rescale), which is what we replicate.
+        # in == out ranges: a plain fake-quant with no rescale.
         assert np.isclose(lo, ol) and np.isclose(hi, oh), f"{nm}: in/out ranges differ"
         out.setdefault(nm.split("/")[0].replace("__module.model.", ""), {})[key] = (lo, hi)
     for blk, d in out.items():
@@ -140,17 +111,15 @@ def parse_attn_fq(ir):
         assert not missing, f"{blk}: missing attention FQ {sorted(missing)}"
     return out
 
-
 def fq_np(x, lo, hi):
     """OV FakeQuantize with in==out ranges, 256 levels (torch tensor in, torch tensor out)."""
     step = float(np.float32((hi - lo) / 255.0))
     return torch.clamp(torch.round((x - lo) / step), 0.0, 255.0) * step + lo
 
-
 def parse_conv(ir, cid):
     """Extract (cname, w_int[OC,ICg,KH,KW], sw[OC], ssc[IC]|None, lo, hi, bias[OC], has_fq)."""
     grouped = ir.T[cid] == "GroupConvolution"
-    # --- weight branch: conv.port1 -> Multiply(fq_weights) <- Convert <- i8 Const, and scale Const ---
+    # weight branch: conv.port1 -> Multiply <- Convert <- i8 Const, and the scale Const
     wmul = ir.src[(cid, "1")][0]
     assert ir.T[wmul] == "Multiply", f"{cname(ir.NM[cid])}: weight src {ir.T[wmul]}"
     w_src = ir.src[(wmul, "0")][0]
@@ -160,13 +129,10 @@ def parse_conv(ir, cid):
         g, ocg, icg, kh, kw = w_i8.shape
         w_i8 = w_i8.reshape(g * ocg, icg, kh, kw)
     OC = w_i8.shape[0]
-    # --- activation branch: conv.port0 -> FakeQuantize(lo,hi) <- (Multiply nncf_smooth_quant <- ssc) ---
+    # activation branch: conv.port0 -> FakeQuantize(lo,hi) <- Multiply(ssc)
     a_id = ir.src[(cid, "0")][0]
     if ir.T[a_id] == "FakeQuantize":
-        # lo/hi are PER-CHANNEL for the 6 head depthwise convs (128/256/512 elements) and scalar for
-        # the other 94. Collapsing them with [0] silently applies channel 0's range to every channel,
-        # which is what made the one2one cls branch diverge from OV (cosine 0.74 at 23.one2one_cv3.2.
-        # 0.0.conv while its input matched at 0.9995). Keep the full vector; the consumer broadcasts.
+        # lo/hi are per-channel for the 6 head depthwise convs and scalar elsewhere; keep the full vector.
         lo = ir.const(ir.src[(a_id, "1")][0]).astype(np.float32).reshape(-1)
         hi = ir.const(ir.src[(a_id, "2")][0]).astype(np.float32).reshape(-1)
         f0 = ir.src[(a_id, "0")][0]
@@ -178,14 +144,12 @@ def parse_conv(ir, cid):
         lo = hi = 0.0
         ssc = None
         has_fq = False
-    # --- bias: conv output -> Add, bias on the other port (Reshape/Const [1,OC,1,1]) ---
+    # bias: conv output -> Add, bias on the other port
     add_id = next(t for t, p in ir.dst[cid] if ir.T[t] == "Add")
     bias = ir.const(ir.src[(add_id, "1")][0]).astype(np.float32).reshape(-1)      # [OC]
     assert bias.shape[0] == OC and sw.shape[0] == OC
     return cname(ir.NM[cid]), w_i8, sw, ssc, lo, hi, bias, has_fq
 
-
-# ----------------------------- BN fold (FP32 fallback convs) ----------------------------------------
 def fold_bn(model):
     """Fold each ultralytics Conv's BN into its Conv2d (bn->Identity). Returns is_silu name->bool."""
     c2w = {id(mod.conv): mod for mod in model.modules() if isinstance(mod, Conv)}
@@ -209,25 +173,19 @@ def fold_bn(model):
             is_silu[name] = False
     return is_silu
 
-
-# ----------------------------- integer-accumulation forward (the oracle) ----------------------------
 def make_sq_forward(mod, w_int, sw, ssc, step, lo, bias):
-    """Asymmetric-uint8 + per-input-channel-smooth integer conv (matches the C-sim conv2d exactly).
-
+    """Asymmetric-uint8 integer conv with per-input-channel smoothing (matches the C++ conv2d).
+    
     real[o] = sw[o]*( step * Σ_ik w_int[o,ik]*q[ik]  +  lo * Σ_{ik in-image} w_int[o,ik] ) + bias[o]
-    The zero-point (lo) term uses the VALID-tap weight sum (a conv of an all-ones map), so padded
-    borders contribute real 0.0 -- exactly like OV -- instead of `lo`. Folding lo into a constant
-    per-channel bias (lo*Σ_all w_int) is wrong at borders and its error propagates inward with depth.
+    The zero-point term uses only in-image taps, so padding contributes 0 (as in OV).
     """
     stride, padding, dilation, groups = mod.stride, mod.padding, mod.dilation, mod.groups
     w_d = w_int.double()
     sw_v = torch.from_numpy(sw.astype(np.float32)).view(1, -1, 1, 1)
     bs = torch.from_numpy(bias.astype(np.float32)).view(1, -1, 1, 1)
     smt = torch.from_numpy(ssc.astype(np.float32)).view(1, -1, 1, 1)
-    # step/lo are per-INPUT-channel for the head depthwise convs, scalar elsewhere. Both views below
-    # are [1,C,1,1]: on the quantize side C indexes input channels; on the dequant side it indexes
-    # output channels. Those are the same axis ONLY because output o reads input o in a depthwise
-    # conv -- which is exactly why NNCF is free to calibrate these per channel and not the others.
+    # step/lo are per-channel for head depthwise convs, where input channel == output channel, so one
+    # [1,C,1,1] view serves both the quantize and the dequant side.
     step_q = torch.as_tensor(step, dtype=torch.float32).view(1, -1, 1, 1)
     lo_q = torch.as_tensor(lo, dtype=torch.float32).view(1, -1, 1, 1)
     per_channel = step_q.numel() > 1
@@ -247,16 +205,10 @@ def make_sq_forward(mod, w_int, sw, ssc, step, lo, bias):
         return (acc_q * step_d + acc_w * lo_d).float() * sw_v + bs  # dequant + valid-tap zero-point
     return fwd
 
-
 def make_attn_forward(mod, fq):
-    """ultralytics Attention.forward with the IR's 5 interior quantizers inserted.
-
-    Two deviations from the stock source, both required to land the quantization boundaries where OV
-    puts them (not to change the math):
-      - q is scaled BEFORE the matmul and quantized there, instead of scaling the q@k product after.
-      - v is quantized TWICE, with different ranges, for its two consumers (matmul vs pe).
-    The q@k product and the softmax itself stay float: OV puts no FakeQuantize on the MatMul output,
-    and SoftMax is a float op there too, so a fully-integer attention would NOT match the reference.
+    """ultralytics Attention.forward with the IR's 5 interior quantizers inserted: q is scaled before the
+    matmul and quantized there, and v is quantized separately for its two consumers. q@k and softmax stay
+    float.
     """
     nh, kd, hd, scale = mod.num_heads, mod.key_dim, mod.head_dim, mod.scale
 
@@ -274,14 +226,13 @@ def make_attn_forward(mod, fq):
         return mod.proj(y)
     return fwd
 
-
 def ingest(ckpt=CKPT):
     """Parse the OV IR, fold BN, and install per-conv SmoothQuant/FP32 forwards on a Yolo26Trunk.
     Returns (trunk, export, matched, unmatched): `trunk` is the integer oracle ready to run;
     `export` maps cname -> the weights_sq tensors; matched/unmatched are the conv-name splits."""
     ir = IR(os.path.join(IRDIR, "best.xml"), os.path.join(IRDIR, "best.bin"))
 
-    # --- parse every IR conv, keyed by C-sim name ---
+    # parse every IR conv, keyed by conv name
     params = {}   # cname -> dict(w_int, sw, ssc, lo, hi, bias, has_fq, grouped)
     for cid in ir.convs():
         nm, w_i8, sw, ssc, lo, hi, bias, has_fq = parse_conv(ir, cid)
@@ -294,7 +245,7 @@ def ingest(ckpt=CKPT):
     all_convs = [(n, mod) for n, mod in trunk.model.named_modules() if isinstance(mod, nn.Conv2d)]
     print(f"[sq] model has {len(all_convs)} convs; folded BN")
 
-    # --- reconcile the two name sets: matched (in IR) vs one2many head (FP32 fallback) ---
+    # matched (in IR) vs one2many head (FP32)
     matched = [n for n, _ in all_convs if n in params]
     unmatched = [n for n, _ in all_convs if n not in params]
     assert all(u.startswith(("23.cv2", "23.cv3")) for u in unmatched), \
@@ -304,7 +255,7 @@ def ingest(ckpt=CKPT):
         f"o2o/backbone convs missing IR scales: {sorted(set(o2o_path) - set(matched))}"
     print(f"[sq] matched(SmoothQuant)={len(matched)}  unmatched(FP32 one2many head)={len(unmatched)}")
 
-    # --- install per-conv forwards + collect export tensors -------------------------------------
+    # install per-conv forwards and collect export tensors
     export = {}   # cname -> dict for weights_sq
     n_asym = n_fp32 = 0
     for name, mod in all_convs:
@@ -317,8 +268,7 @@ def ingest(ckpt=CKPT):
         w_int = torch.from_numpy(p["w_i8"])
         sw, bias, ssc = p["sw"], p["bias"], p["ssc"]
         if p["has_fq"]:                                         # SmoothQuant asymmetric integer path
-            # Pin step/lo to float32 (like Phase 2's sa) so the oracle quantizes with the EXACT same
-            # boundaries the C-sim reads from the %.9e manifest -> pure-conv stack stays bit-exact.
+            # float32 step/lo: the oracle quantizes with the same boundaries the C++ model reads from the manifest.
             step = np.float32((p["hi"] - p["lo"]) / 255.0).reshape(-1)
             lo = np.float32(p["lo"]).reshape(-1)
             if ssc is None:
@@ -336,7 +286,7 @@ def ingest(ckpt=CKPT):
             n_fp32 += 1
     print(f"[sq] installed forwards: SmoothQuant-asym={n_asym}  FP32(one2many head)={n_fp32}")
 
-    # --- attention interiors: quantize the 4 matmul operands + softmax the way the IR does ---------
+    # attention interiors: quantize as the IR does
     attn_fq = parse_attn_fq(ir)
     named = dict(trunk.model.named_modules())
     for blk, fq in attn_fq.items():
@@ -344,7 +294,6 @@ def ingest(ckpt=CKPT):
         named[blk].forward = make_attn_forward(named[blk], fq)
     print(f"[sq] installed quantized attention on {len(attn_fq)} block(s): {sorted(attn_fq)}")
     return trunk, export, matched, unmatched, attn_fq
-
 
 def main():
     os.makedirs(WSQ, exist_ok=True)
@@ -354,7 +303,7 @@ def main():
     n_asym = sum(1 for e in export.values() if e["qmode"] == 1)
     n_fp32 = sum(1 for e in export.values() if e["qmode"] == 0)
 
-    # --- pass: dump per-layer oracle activations on the shared image (mirrors quantize_yolo26.py) ---
+    # dump per-layer oracle activations on the shared image
     xin = np.fromfile(os.path.join(DUMPS_FP32, "input.bin"), dtype="<f4")
     assert xin.size == 3 * 640 * 640
     x = torch.from_numpy(xin.copy()).view(1, 3, 640, 640)
@@ -389,7 +338,7 @@ def main():
         h.remove()
     print(f"[sq] wrote SmoothQuant oracle dumps -> {DUMPS_SQ}")
 
-    # --- export weights_sq: manifest_sq.txt cols = name oc ic kh kw sh sw ph pw groups qmode act sa lo
+    # export weights_sq: manifest_sq.txt cols = name oc ic kh kw sh sw ph pw groups qmode act sa lo
     lines = []
     for name, mod in all_convs:
         e = export[name]
@@ -399,8 +348,7 @@ def main():
         if e["qmode"] == 1:
             e["sw"].astype("<f4").tofile(os.path.join(WSQ, f"{name}.sw.bin"))
             e["ssc"].astype("<f4").tofile(os.path.join(WSQ, f"{name}.ssc.bin"))
-            # The 6 head depthwise convs carry a per-input-channel activation range; everything else
-            # is per-tensor. Side files + a flag column, so the C-sim never has to guess from sizes.
+            # Head depthwise convs have per-channel activation ranges (side files + a flag column).
             perch = int(e["sa"].size > 1)
             if perch:
                 e["sa"].astype("<f4").tofile(os.path.join(WSQ, f"{name}.sa.bin"))
@@ -429,7 +377,6 @@ def main():
                                   if export[n]["qmode"] == 1}},
                   f, indent=1)
     print(f"[sq] exported {len(all_convs)} convs ({n_asym} SmoothQuant + {n_fp32} FP32) -> {WSQ}")
-
 
 if __name__ == "__main__":
     main()

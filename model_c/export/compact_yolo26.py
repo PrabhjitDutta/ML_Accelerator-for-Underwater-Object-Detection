@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
-"""Phase 4: physically compact the pruned50 zeroed channels out of a C-sim weights dir.
+"""Physically remove pruned (all-zero) channels from a weights dir.
 
-Mask pruning (prune_yolo26s.py) zeros whole OUTPUT filters but keeps dense shapes, so the compute/BRAM
-win is only realized once a backend physically drops the dead channels. That is NOT a layer-local edit:
-a dead producer-output channel does not line up with any consumer-input channel, and YOLO26 couples
-channel dims through C3k2 split/concat, SPPF concat, and the C2PSA/PSABlock/Bottleneck residual adds.
+Walks the trunk wiring (mirrors yolo26_network.cpp) with per-channel provenance, so residual adds union
+their operands' live sets and every conv learns which input/output channels to keep. Slices weights,
+per-OC scales, per-IC smooth scales and bias; writes the compacted weights dir plus compaction_map.json.
+Only channels whose output is identically zero and that no residual add revives are dropped (lossless).
+attn.qkv inputs stay full width: attention() derives num_heads/head_dim from them.
 
-This builds the global channel-liveness dependency graph by walking the EXACT trunk wiring (mirroring
-csim/yolo26_trunk.cpp) with per-channel provenance, so residual adds union their operands' surviving
-sets and every conv learns which input/output channels to keep. It then physically slices every weight
-(and the SmoothQuant/INT8 per-OC scales, per-IC smooth scales, bias) and writes a compacted weights dir
-plus a compaction_map.json (compacted oc/ic per conv + per-split compacted split index for the C-sim).
-
-Losslessness: only channels whose filter is exactly zero AND that are not revived by a residual add are
-dropped, so the compacted graph computes bit-identically. Verified two ways: (a) re-expanding the
-compacted weights to dense reproduces the originals on kept channels and the dropped output filters were
-all-zero; (b) the rewired compacted C-sim matches the dense C-sim at cosine 1.0 (build_csim.sh).
-
-Attention head-reshape inputs (the C2PSA / layer-22 `*.attn.qkv.conv` inputs) are kept full width, since
-attention() derives num_heads/head_dim from that channel count.
-
-  conda run -n ueaod python hls/export/compact_yolo26.py [weights_dir]   # default hls/weights (FP32)
+  python model_c/export/compact_yolo26.py [weights_dir]
 """
 import os
 import sys
@@ -33,22 +20,14 @@ from ultralytics import YOLO
 HERE = os.path.dirname(os.path.abspath(__file__))
 CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
 
-
-# ----------------------------- liveness graph (mirrors yolo26_trunk.cpp) ----------------------------
 class Compactor:
-    """Walks the 24-layer trunk carrying per-channel provenance to solve channel liveness.
+    """Walks the trunk carrying per-channel provenance to solve channel liveness.
+    
+    prov[i] = list of (conv, oc) summed into channel i. keep_out[conv] starts as the nonzero-filter mask and
+    is unioned wherever a residual add revives a channel; keep_in = kept(input tensor)."""
 
-    A tensor is a list `prov` of length C; prov[i] = list of (conv_name, oc) that are ADDED at channel i
-    (one entry for a plain conv output, several after residual adds). keep_out[conv] is a bool[oc] that
-    starts as the conv's nonzero-filter mask and is unioned upward wherever a residual add revives a
-    channel. kept(t)[i] = OR over prov[i] of keep_out. After the walk keep_out is final; each conv's
-    keep_in is kept(its input tensor)."""
-
-    # dw -> the 1x1 that consumes it, in every cls head branch. A dw output channel whose input died
-    # is a nonzero CONSTANT act(bias); because the consumer is 1x1 with pad=0 that constant lands as a
-    # per-output-channel constant in the consumer's accumulator, so it can be folded into its bias and
-    # the channel physically dropped. (A padded 3x3 consumer would see a different tap set at the
-    # borders and this would NOT be a constant.)
+    # dw -> its 1x1 consumer in each cls head branch. A dw channel with a dead input emits a constant
+    # act(bias); a 1x1 pad=0 consumer turns that into a per-channel constant, which folds into its bias.
     FOLD_PAIRS = {f"{root}.{i}.{j}.0.conv": f"{root}.{i}.{j}.1.conv"
                   for root in ("23.cv3", "23.one2one_cv3") for i in range(3) for j in range(2)}
 
@@ -59,27 +38,20 @@ class Compactor:
         self.conv_in = {}                                      # conv -> input tensor (prov) at build time
         self.splits = {}                                       # block idx -> ORIGINAL split channel c
         self.oc = {n: len(m) for n, m in nz.items()}
-        # Folded dw convs use the AND rule (a dead input DOES kill the output, because the resulting
-        # constant is folded downstream instead of being computed). Seed them all-dead and OR in
-        # `nz & kept(x)` each pass so the solve stays monotone-increasing.
+        # Folded dw convs use the AND rule (the constant is folded downstream). Seed all-dead and OR in
+        # `nz & kept(x)` each pass so the solve stays monotone.
         self.folded = {n for n in nz if fold and n in self.FOLD_PAIRS} if fold else set()
         self.keep_out = {n: (np.zeros_like(m) if n in self.folded else m.copy())
                          for n, m in nz.items()}          # conv -> bool[oc]
 
-    # -- tensor ops --
     def conv(self, name, x):
         self.conv_in[name] = x
         if name in self.folded:
             assert len(x) == self.oc[name], (name, len(x), self.oc[name])
             self.keep_out[name] |= (self.nz[name] & self.kept(x))
         elif self.groups[name] > 1:
-            # DEPTHWISE: output channel o reads ONLY input channel o, so oc==ic==groups must hold
-            # after compaction -> keep_out and keep_in have to be the SAME set.
-            #
-            # Note it is NOT valid to kill output o just because input channel o died: the conv still
-            # emits act(bias[o]), a nonzero CONSTANT (verified: every such channel in the one2many /
-            # one2one cls heads has |bias| up to 3.5). So the union is the correct direction -- a live
-            # dw output REVIVES its input channel rather than a dead input killing the output.
+            # Depthwise: output o reads only input o, so keep_out == keep_in. A dead input does not kill the
+            # output (it still emits act(bias[o])), so a live output revives its input.
             assert len(x) == self.oc[name], (name, len(x), self.oc[name])
             m = self.keep_out[name] | self.kept(x)
             self.keep_out[name] = m
@@ -103,7 +75,6 @@ class Compactor:
         assert len(A) == len(B), (len(A), len(B))
         return [A[i] + B[i] for i in range(len(A))]           # both producers contribute at channel i
 
-    # -- keep helpers --
     def kept(self, t):
         return np.array([any(self.keep_out[c][o] for (c, o) in ch) for ch in t], dtype=bool)
 
@@ -120,7 +91,6 @@ class Compactor:
                 for (c, o) in A[i] + B[i]:
                     self.keep_out[c][o] = True
 
-    # -- blocks (mirror yolo26_trunk.cpp) --
     def bottleneck(self, p, x, addr):
         y = self.conv(p + ".cv1.conv", x)
         y = self.conv(p + ".cv2.conv", y)
@@ -146,9 +116,8 @@ class Compactor:
         return self.conv(s + ".cv2.conv", self.concat([a, b, mb]))
 
     def psablock(self, p, x):
-        # Attention is fully protected (dense, unpruned) and its qkv/pe/proj all stay full width; the
-        # only constraint is the qkv INPUT must stay full (attention() derives num_heads/head_dim from
-        # it). qkv/pe/proj input+output are all x-width (256) -> pass x as the (full) stand-in tensor.
+        # Attention is protected (full width); the qkv input must stay full since attention() derives
+        # num_heads/head_dim from it.
         self.force_full(x)
         self.conv(p + ".attn.qkv.conv", x)          # in=x(full), out=protected-full
         self.conv(p + ".attn.pe.conv", x)           # depthwise on v (== x width), protected-full
@@ -227,8 +196,7 @@ class Compactor:
         x20 = self.conv("20.conv", x19)
         x21 = self.concat([x20, x10])
         x22 = self.c3k2_attn(22, x21)
-        # tensors that the C-sim dumps, so the compacted dumps can be scattered back to dense
-        # channel slots and compared per-layer against the dense reference.
+        # Dumped tensors, so compacted dumps can be scattered back to dense channel slots for comparison.
         dumped = {"0": x0, "1": x1, "2": x2, "3": x3, "4": x4, "5": x5, "6": x6, "7": x7,
                   "8": x8, "9": x9, "10": x10, "11": x10, "12": x12, "13": x13, "14": x13,
                   "15": x15, "16": x16, "17": x17, "18": x18, "19": x19, "20": x20,
@@ -238,8 +206,6 @@ class Compactor:
                 (self.head_box if "cv2" in root else self.head_cls)(root, i, f)
         return dumped
 
-
-# ----------------------------- driver ---------------------------------------------------------------
 def nonzero_masks(wdir, manifest_name, names):
     """bool[oc] per conv: an output filter is live iff not all-zero (dead filters == pruned channels)."""
     nz = {}
@@ -250,7 +216,6 @@ def nonzero_masks(wdir, manifest_name, names):
         nz[n] = (np.abs(w).sum(axis=1) > 0)
     return nz
 
-
 def _read_manifest(wdir):
     for mn in ("manifest_sq.txt", "manifest_int8.txt", "manifest.txt"):
         p = os.path.join(wdir, mn)
@@ -259,7 +224,6 @@ def _read_manifest(wdir):
             return mn, rows
     raise FileNotFoundError(f"no manifest in {wdir}")
 
-
 def _oc_from_manifest(wdir, mn, name):
     for r in open(os.path.join(wdir, mn)):
         f = r.split()
@@ -267,17 +231,12 @@ def _oc_from_manifest(wdir, mn, name):
             return int(f[1])
     raise KeyError(name)
 
-
 def _act(v, act):
     return v / (1.0 + np.exp(-v)) if int(act) == 1 else v          # 1 = SiLU, 0 = identity
 
-
 def _fold_dw_constants(wdir, mn, row_by, comp, keep_out):
     """Fold each dropped dw channel's constant act(bias) into the consuming 1x1's bias.
-
-    A dw output channel whose input channel is dead still emits act(bias[o]) at every position. The
-    consumer is 1x1 with pad=0, so its contribution to output o' is the position-independent constant
-    sum_o w[o',o]*C[o] -- exactly a bias term. Returns {conv_name: new dense bias array}.
+    Returns {conv_name: new dense bias array}.
     """
     out = {}
     for dw, pw in Compactor.FOLD_PAIRS.items():
@@ -294,8 +253,7 @@ def _fold_dw_constants(wdir, mn, row_by, comp, keep_out):
         w = np.fromfile(os.path.join(wdir, f"{pw}.w.bin"), dtype="<f4").reshape(oc_p, ic_p)[:, dropped]
         b = np.fromfile(os.path.join(wdir, f"{pw}.b.bin"), dtype="<f4").astype(np.float64)
         if mn == "manifest_sq.txt" and int(rp[10]) == 1:
-            # SmoothQuant: the consumer would have QUANTIZED these constants, so fold the quantized
-            # value to stay faithful to the deployed model rather than the exact real one.
+            # SmoothQuant: the consumer quantizes these constants, so fold the quantized value.
             sa, lo = float(rp[12]), float(rp[13])
             sw = np.fromfile(os.path.join(wdir, f"{pw}.sw.bin"), dtype="<f4").astype(np.float64)
             ssc = np.fromfile(os.path.join(wdir, f"{pw}.ssc.bin"), dtype="<f4").astype(np.float64)[dropped]
@@ -315,7 +273,6 @@ def _fold_dw_constants(wdir, mn, row_by, comp, keep_out):
         out[pw] = b.astype("<f4")
     return out
 
-
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     fold = "--fold" in sys.argv
@@ -327,9 +284,7 @@ def main():
     row_by = {r[0]: r for r in rows}
     nz = nonzero_masks(wdir, mn, names)
 
-    # Add-unions only ever REVIVE channels, and a union applied late in the walk can revive a
-    # channel that an earlier union should then have propagated. The walk is pure w.r.t. keep_out
-    # (provenance is structural), so just re-run it to a fixpoint.
+    # Add-unions only revive channels and a late union may need re-propagating: iterate to a fixpoint.
     groups = {r[0]: int(r[9]) for r in rows}
     comp = Compactor(nz, groups, fold=fold)
     for it in range(1, 21):
@@ -347,7 +302,7 @@ def main():
     keep_in = {n: comp.kept(comp.conv_in[n]) for n in names}
     keep_out = comp.keep_out
     os.makedirs(outdir, exist_ok=True)
-    # constant-fold the dropped dw channels into their 1x1 consumers' biases (only when --fold)
+    # fold dropped dw channels into their 1x1 consumers' biases (--fold)
     bias_override = _fold_dw_constants(wdir, mn, row_by, comp, keep_out) if fold else {}
     if fold:
         nfold = sum(int((~keep_out[dw]).sum()) for dw in Compactor.FOLD_PAIRS if dw in keep_out)
@@ -380,9 +335,7 @@ def main():
                 v = bias_override[n] if (suf == "b" and n in bias_override) \
                     else np.fromfile(p, dtype="<f4")
                 v[ko].astype("<f4").tofile(os.path.join(outdir, f"{n}.{suf}.bin"))
-        # per-IC vectors sliced by keep_in: the smooth pre-scale, and (head depthwise convs only) the
-        # per-input-channel activation step/in_low. All three are indexed by input channel, so they
-        # follow keep_in -- slicing them by keep_out would silently misalign the shrunk depthwise convs.
+        # Per-IC vectors (smooth scale; per-channel step/lo on head dw convs) follow keep_in, not keep_out.
         for suf in ("ssc", "sa", "lo"):
             p = os.path.join(wdir, f"{n}.{suf}.bin")
             if os.path.exists(p):
@@ -391,7 +344,7 @@ def main():
         cmap["convs"][n] = {"oc": new_oc, "ic": new_ic, "groups": groups,
                             "keep_out": np.flatnonzero(ko).tolist(), "keep_in": np.flatnonzero(ki).tolist()}
 
-    # compacted manifest: same columns, oc/ic replaced; per-block compacted split index appended file
+    # compacted manifest: same columns, oc/ic replaced
     _write_manifest(wdir, outdir, mn, rows, cmap)
     # compacted split points (in compacted channel space) for the C-sim
     comp_splits = {}
@@ -403,13 +356,11 @@ def main():
     # per-dumped-tensor dense channel indices (for scatter-back validation vs the dense dumps)
     cmap["dumps"] = {k: np.flatnonzero(comp.kept(t)).tolist() for k, t in dumped.items()}
     json.dump(cmap, open(os.path.join(outdir, "compaction_map.json"), "w"), indent=1)
-    # Attention-interior quantizer ranges pass through untouched: the qkv/proj/pe convs are pruning-
-    # protected, so compaction never changes an attention block's channel count, and the FQ ranges
-    # are per-tensor anyway.
+    # Attention quantizer ranges pass through: attention blocks are never compacted.
     afq = os.path.join(wdir, "attn_fq.txt")
     if os.path.exists(afq):
         shutil.copy(afq, os.path.join(outdir, "attn_fq.txt"))
-    # plain-text split table the C-sim reads (the ONE thing in the graph that isn't shape-derived)
+    # split table the C++ model reads (the only non-shape-derived part of the graph)
     with open(os.path.join(outdir, "splits.txt"), "w") as f:
         for i in sorted(comp_splits, key=int):
             f.write(f"{i} {comp_splits[i]}\n")
@@ -420,7 +371,6 @@ def main():
     print(f"[compact] output channels kept {live_oc}/{all_oc} ({100*(1-live_oc/all_oc):.1f}% dropped); "
           f"conv weights {tot_p1/1e6:.3f}M / {tot_p0/1e6:.3f}M ({100*(1-tot_p1/tot_p0):.1f}% smaller)")
     _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, comp.folded)
-
 
 def _write_manifest(wdir, outdir, mn, rows, cmap):
     out = []
@@ -434,14 +384,9 @@ def _write_manifest(wdir, outdir, mn, rows, cmap):
         out.append(" ".join(r))
     open(os.path.join(outdir, mn), "w").write("\n".join(out) + "\n")
 
-
 def _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, folded=frozenset()):
-    """Prove every dropped channel carried an identically-zero activation.
-
-    An output channel is safe to drop iff its response is identically 0 for ALL inputs, which needs
-    BOTH an all-zero filter AND an all-zero (BN-folded) bias -- a zeroed filter with a live bias is a
-    nonzero CONSTANT channel, which would make compaction lossy. Depthwise convs get the extra route
-    that their own input channel is dead, which zeroes the output regardless of the filter.
+    """Check every dropped channel's output is identically zero: all-zero filter AND all-zero bias, or
+    (depthwise) a dead input channel.
     """
     bad = 0
     for r in rows:
@@ -464,7 +409,6 @@ def _verify_lossless(wdir, outdir, mn, rows, keep_in, keep_out, nz, folded=froze
                 print(f"[verify] FAIL {n}: dropped a filter with nonzero bias (constant channel)"); bad += 1
     print(f"[verify] lossless check: "
           f"{'OK (every dropped channel is identically zero)' if bad == 0 else f'{bad} FAILURES'}")
-
 
 if __name__ == "__main__":
     main()

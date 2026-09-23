@@ -1,8 +1,6 @@
-# harden.tcl - re-implement the ZCU102 bring-up BD with the KERNEL's replay recipe (pwr/replay.tcl), to
-# buy margin over impl_1's +0.002 ns. Adds impl_2 beside impl_1, from the SAME synth_1: impl_1, its .bit
-# and .xsa are never touched. Recipe = replay.tcl: opt Explore (HLS export used ExplorePostRoutePhysOpt),
-# power_opt ON, place ExtraNetDelay_high, phys_opt AggressiveExplore, route NoTimingRelaxation,
-# post-route phys_opt default.
+# Re-implement the block design for more timing margin. Adds impl_2 beside impl_1 from the same synth_1
+# (impl_1 and its outputs are untouched). Recipe: opt Explore, power_opt on, place ExtraNetDelay_high,
+# phys_opt AggressiveExplore, route NoTimingRelaxation, post-route phys_opt default.
 # args: <project dir> <outdir>
 set prj    [lindex $argv 0]
 set outdir [lindex $argv 1]
@@ -12,8 +10,7 @@ open_project $prj/bringup.xpr
 if {[get_runs -quiet impl_2] ne ""} { puts "### !!! impl_2 already exists - refusing to overwrite it"; exit 1 }
 create_run impl_2 -parent_run synth_1 -flow [get_property FLOW [get_runs impl_1]]
 set r [get_runs impl_2]
-# Every property is set inside catch so a name that does not exist in this release (the 2026-08-24
-# STEPS.WRITE_BITSTREAM.IS_ENABLED lesson) fails HERE, in the first minute, not after place & route.
+# Every property is set inside catch so a name missing in this release fails in the first minute.
 foreach {p v} {
     STEPS.OPT_DESIGN.ARGS.DIRECTIVE                 Explore
     STEPS.POWER_OPT_DESIGN.IS_ENABLED               true

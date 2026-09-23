@@ -1,33 +1,9 @@
-# Post-route POWER, UTILIZATION and TIMING for the per-conv kernel on XCZU9EG.
-#
-# This is the project's FIRST power measurement - nothing has ever been measured. It is also the most
-# license-window-sensitive step in the whole flow: the Vivado ML Enterprise evaluation that unlocks
-# ZU9EG expires 2026-10-16. The permanent Basic license keeps Vivado_Implementation but only up to
-# ZU7EV, so after that date this runs on the ZU6EG proxy or not at all.
-#
-#   # 1. produce a routed design (this is what writes the checkpoint we open here)
-#   $env:Y26_IMPL = 1
-#   vitis-run --mode hls --tcl Y:/model_c/scripts/hls_csim_synth_cosim.tcl
-#
-#   # 2. then, pointing at that solution
-#   vivado -mode batch -source Y:/model_c/scripts/vivado_power_report.tcl -tclargs C:/hls_y26/prj_<sol>/<sol>
-#
-# Space-free paths only, for the same reason as the HLS flow - see hls_csim_synth_cosim.tcl's header.
-#
-# ---------------------------------------------------------------------------------------------
-# READ THIS BEFORE QUOTING THE POWER NUMBER.
-#
-# With no switching-activity input, report_power runs VECTORLESS: it assumes default toggle rates
-# (typically 12.5% on data nets) rather than measuring what this design actually does. That is a
-# rough estimate, NOT a measurement, and its error bars are wide - Vivado itself labels the
-# confidence level, and vectorless on a fresh design usually comes back "Low".
-#
-# The honest version needs real activity: run cosim with tracing enabled, convert the resulting
-# waveform to SAIF, and read it in with read_saif before report_power. That path is set up below and
-# gated on the SAIF actually existing, so the script cannot silently produce a vectorless number
-# while appearing to have used activity data. ALWAYS report which of the two produced the figure -
-# the confidence level is printed for exactly this reason.
-# ---------------------------------------------------------------------------------------------
+# Post-route power, utilization and timing for the per-conv kernel on XCZU9EG.
+#   # 1. a routed design:  $env:Y26_IMPL = 1; vitis-run --mode hls --tcl Y:/model_c/scripts/hls_csim_synth_cosim.tcl
+#   # 2. vivado -mode batch -source Y:/model_c/scripts/vivado_power_report.tcl -tclargs C:/hls_y26/prj_<sol>/<sol>
+# Space-free paths only (see hls_csim_synth_cosim.tcl).
+# Without a SAIF, report_power is vectorless (default toggle rates), an estimate. With a SAIF from cosim it uses
+# real activity. The printed confidence level says which.
 
 if {$argc < 1} {
     puts "### ERROR: usage: vivado -mode batch -source vivado_power_report.tcl -tclargs <solution-dir> \[saif\]"
@@ -37,8 +13,7 @@ set soldir [lindex $argv 0]
 set saif   ""
 if {$argc > 1} { set saif [lindex $argv 1] }
 
-# Locate the routed checkpoint. Its exact path has moved between releases, so search rather than
-# hard-code and fail loudly if the impl flow did not actually run to completion.
+# Search for the routed checkpoint (its path varies by release).
 set dcps [glob -nocomplain "$soldir/impl/verilog/project.runs/impl_1/*_routed.dcp"]
 if {[llength $dcps] == 0} {
     set dcps [glob -nocomplain "$soldir/impl/**/*_routed.dcp"]
@@ -56,8 +31,7 @@ open_checkpoint $dcp
 set outdir "$soldir/impl/report/verilog"
 file mkdir $outdir
 
-# Utilization and timing first: both are true post-route measurements and neither depends on the
-# activity question above. These are the numbers that settle whether the csynth ESTIMATES were sound.
+# Utilization and timing do not depend on switching activity.
 report_utilization      -file "$outdir/y26_post_route_utilization.rpt"
 report_timing_summary   -file "$outdir/y26_post_route_timing.rpt"
 
@@ -67,8 +41,7 @@ if {$saif ne "" && [file exists $saif]} {
     read_saif $saif
     set confidence_note "SAIF-driven (activity from cosim)"
 } elseif {$saif ne ""} {
-    # Do not silently fall through to vectorless - that is how an estimate gets quoted as a
-    # measurement. A named-but-missing SAIF is a mistake worth stopping for.
+    # A named SAIF that is missing is an error, not a silent fall-back to vectorless.
     puts "### ERROR: SAIF '$saif' was specified but does not exist."
     exit 1
 }

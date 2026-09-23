@@ -1,9 +1,4 @@
-// layer_ops.h - FP32 primitives for the YOLO26s trunk C-simulation.
-//
-// Adapted from htdet's fpga_utils.h conv/activation kernels, generalized to YOLO26's needs
-// (arbitrary stride/pad/groups incl. depthwise, k5 maxpool for SPPF, nearest 2x upsample, and the
-// C2PSA/PSABlock attention primitive). BN is pre-folded at export time, so conv applies
-// out = act(conv(x) * scale + bias) with scale/bias read per output channel.
+// FP32/INT8 primitives for the YOLO26s reference model. BN is folded at export: out = act(conv(x)*scale + bias).
 #pragma once
 #include <vector>
 #include <cmath>
@@ -20,12 +15,10 @@
 #include "tensor_types.h"
 #include "weights_loader.h"
 
-// SiLU in double then rounded to float -- closest portable match to torch's float32 SiLU (the
-// residual ULP gap vs torch's vectorized exp is the main non-integer term left in the INT8 gate).
+// SiLU in double, rounded to float: the closest portable match to torch's float32 SiLU.
 static inline float silu(float v) { double d = v; return (float)(d / (1.0 + std::exp(-d))); }
 
-// Symmetric signed-INT8 quantize to an integer code (as float): clamp(round(v/s), -127, 127).
-// nearbyint uses round-half-to-even (FE_TONEAREST), matching torch.round in the Python oracle.
+// Symmetric INT8 code: clamp(round(v/s), -127, 127). nearbyint rounds half-to-even, like torch.round.
 static inline float q_i8(float v, float s) {
     float q = std::nearbyint(v / s);
     if (q > 127.f) q = 127.f; else if (q < -127.f) q = -127.f;
@@ -40,11 +33,9 @@ static inline float q_u8(float v, float ssc, float lo, float step) {
     return q;
 }
 
-// q_u8 over n values -> uint8 codes, bit-identical to q_u8 per element but with no divide. x*(1/step) is within
-// |q|*2^-22.4 of x/step, so both round alike unless a .5 tie lies between them - and then x*(1/step) is within
-// 2^-12 of it (|q| < 1024; beyond that both clamp alike). Such a 64-block is redone with the divide (~1% of
-// blocks). Hoisted __restrict pointers + the dynamic cost model let GCC vectorize the block (NEON on the A53,
-// whose divider is unpipelined). board_host/test_quantizer.cpp checks it against q_u8.
+// q_u8 over n values without a divide, bit-identical to q_u8: x*(1/step) rounds like x/step except near a .5
+// tie, and such a 64-block is redone with the divide. Written so GCC vectorizes it (NEON).
+// Checked by board_host/test_quantizer.cpp.
 __attribute__((optimize("vect-cost-model=dynamic")))
 inline void quant_plane(uint8_t* __restrict xo, const float* __restrict xp, size_t n, float s, float lo, float st) {
     const float inv = 1.f / st;
@@ -63,9 +54,7 @@ inline void quant_plane(uint8_t* __restrict xo, const float* __restrict xp, size
     for (; j < n; ++j) xo[j] = (uint8_t)(int)q_u8(xp[j], s, lo, st);
 }
 
-// Output-column range [o0,o1) over which tap column `base = kw - pad_w` lands inside the image,
-// i.e. 0 <= ow*sw + base <= W-1. Computing this once per tap replaces the per-element bounds test:
-// the zero padding is expressed as a shorter loop range rather than as a branch taken OW times.
+// Output-column range [o0,o1) where tap column base = kw - pad_w is inside the image: padding becomes a shorter loop.
 static inline void ow_range(int base, int sw, int W, int OW, int& o0, int& o1) {
     o0 = base >= 0 ? 0 : (-base + sw - 1) / sw;
     o1 = W - 1 - base;
@@ -73,22 +62,13 @@ static inline void ow_range(int base, int sw, int W, int OW, int& o0, int& o1) {
     if (o1 > OW) o1 = OW;
 }
 
-// Generic 2D convolution + folded BN/scale + activation. Handles groups (g==C => depthwise).
-// INT8 mode (c.quant): the exact integer W8A8 dataflow -- the input is quantized to int8 codes
-// (c.sa), c.w already holds the per-channel int8 weight codes, and each output accumulates the
-// integer products in an exact int32 (order-independent) before dequant+bias:
-//     real[o] = acc_int[o] * (c.sa * c.wsc[o]) + bias[o]     then activate.
-// This integer accumulation is what makes the C-sim bit-stable against the PyTorch oracle (float
-// conv reduction-order noise, which the hard rounding would otherwise amplify, cannot arise).
-// One source of a conv's input channel-concat (ps-notes §10). PLAIN is a tensor. The rest are an op whose ONLY
-// reader is that conv, so the board fuses it into its quantizer instead of building the tensor (the CPU path
-// materializes it, y26_materialize): ADD = a+b (a residual), UP2X = nearest 2x upsample of a, POOL = k chained
-// maxpool(5,1,2) of a (SPPF). Exact: ADD is the same float add; q is elementwise (commutes with the upsample) and
-// monotone for ssc > 0, step > 0 (commutes with max - asserted where it is used).
+// One source of a conv's channel-concatenated input. PLAIN is a tensor. ADD (a+b), UP2X (nearest 2x of a) and
+// POOL (k chained maxpool(5,1,2) of a) are read only by that conv: the board fuses them into its quantizer, the
+// CPU path materializes them (y26_materialize). Exact: q is elementwise and monotone for ssc, step > 0.
 struct Src {
     enum Op { PLAIN, ADD, UP2X, POOL };
     Op op; const Tensor* a; const Tensor* b; int k;
-    Src(const Tensor* t) : op(PLAIN), a(t), b(nullptr), k(0) {}   // implicit: {&x, &y} call sites are unchanged
+    Src(const Tensor* t) : op(PLAIN), a(t), b(nullptr), k(0) {}
     static Src sum(const Tensor* x, const Tensor* y) { Src s(x); s.op = ADD; s.b = y; return s; }
     static Src up2x(const Tensor* x) { Src s(x); s.op = UP2X; return s; }
     static Src pool(const Tensor* x, int n) { Src s(x); s.op = POOL; s.k = n; return s; }
@@ -96,20 +76,17 @@ struct Src {
     int H() const { return op == UP2X ? 2 * a->H : a->H; }
     int W() const { return op == UP2X ? 2 * a->W : a->W; }
 };
-// Board: one PLAIN source's X codes, packed ahead of its conv (ps-notes §13) - on its own thread when async, so it
-// overlaps the convs before it; deferred to the conv otherwise. Null (a no-op) off the board or for a CPU conv.
+// Board: one PLAIN source's X codes, packed ahead of its conv (on its own thread when async). Null off the board.
 struct Y26Pre;
 using Pre = std::shared_ptr<Y26Pre>;
 #ifdef Y26_BOARD
-// board_host/board_host.cpp: the ZCU102 kernel. xs = the conv's input as channel-concatenated sources; pre = one of
-// them already packed (y26_board_prepack).
+// board_host.cpp: runs the conv on the kernel. xs = the channel-concatenated input sources; pre = one already packed.
 Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre = nullptr);
 // t = c's FIRST (last = false) or LAST input source. t's storage must outlive the conv; t itself may be moved.
 Pre y26_board_prepack(const Tensor* t, const ConvW& c, bool last);
 // The frame loop's input as uint8 k (float k/255.f): 0.conv packs it through a 256-entry table. u8 = null forgets d.
 void y26_input_u8(const float* d, std::shared_ptr<const std::vector<uint8_t>> u8);
-// PS profile (board builds only): SELF time per op - a scope's time excludes the timed scopes inside it,
-// so the table sums to the trunk's CPU time. Per thread: with async branches the rows sum past the wall clock.
+// Board-only PS profile: self time per op (nested timed scopes excluded), per thread.
 struct Y26Prof {
     struct E { double ms = 0; int n = 0; };
     static std::map<std::string, E>& tab() { static auto* t = new std::map<std::string, E>; return *t; }  // leaked: read at exit
@@ -124,9 +101,9 @@ struct Y26Prof {
     }
 };
 #define Y26_PROF(n) Y26Prof y26_prof_(n)
-bool y26_async();   // board_host/board_host.cpp: independent trunk branches on their own threads (Y26_ASYNC=0: off)
-void y26_frame_end(int frame);   // board_host/board_host.cpp: frame loop - print this frame's split, start the next
-void y26_board_weights(const Weights& W);   // frame loop: HW lever B (-DY26_YQ8, Y26_YQ=1) reads consumer params
+bool y26_async();   // board_host.cpp: run independent trunk branches on their own threads (Y26_ASYNC=0: off)
+void y26_frame_end(int frame);   // board_host.cpp: end of frame, print its timing split
+void y26_board_weights(const Weights& W);   // board_host.cpp: consumer params for -DY26_YQ8
 #else
 inline Pre y26_board_prepack(const Tensor*, const ConvW&, bool) { return nullptr; }
 inline void y26_input_u8(const float*, std::shared_ptr<const std::vector<uint8_t>>) {}
@@ -135,9 +112,12 @@ inline void y26_board_weights(const Weights&) {}
 inline bool y26_async() { return false; }
 inline void y26_frame_end(int) {}
 #endif
+
+// 2D conv + folded BN/scale + activation; groups == C is depthwise. INT8 mode quantizes the input and accumulates
+// the integer products exactly (order-independent), then real = acc * (sa * wsc[o]) + bias[o].
 inline Tensor conv2d(const Tensor& x, const ConvW& c) {
 #ifdef Y26_BOARD
-    if (c.quant && c.asym) return y26_board_conv({&x}, c);   // same eligibility as the tb gates
+    if (c.quant && c.asym) return y26_board_conv({&x}, c);   // same eligibility as the kernel testbench
 #endif
     Y26_PROF("cpu conv (pe dw, float)");
     CSIM_HOST_ASSERT(x.C == c.ic, "conv " + c.name + ": input has C=" + std::to_string(x.C) +
@@ -157,20 +137,18 @@ inline Tensor conv2d(const Tensor& x, const ConvW& c) {
                 float* qp = &xq.d[(size_t)ic * HW];
                 for (size_t j = 0; j < HW; ++j) qp[j] = q_u8(xp[j], s, lo, st);
             }
-        } else {                                // Phase-2: symmetric signed int8, per-tensor sa
+        } else {                                // symmetric signed int8, per-tensor sa
             CSIM_OMP_STATIC
             for (int i = 0; i < (int)x.d.size(); ++i) xq.d[i] = q_i8(x.d[i], c.sa);
         }
     }
-    const Tensor& X = c.quant ? xq : x;         // read activations through X below
+    const Tensor& X = c.quant ? xq : x;
     Tensor y(c.oc, OH, OW);
     const int icpg = c.ic / c.groups;      // input channels per group
     const int ocpg = c.oc / c.groups;      // output channels per group
     const int ktap = c.kh * c.kw;
-    // SmoothQuant zero-point: accw is Sum(w_int) over the IN-IMAGE taps. The icl axis contributes the
-    // same weights at every output position, so pre-sum it once per conv here; the per-row pass below
-    // then costs kh*kw range-adds instead of icpg*kh*kw (one add per tap). Bit-safe to reorder: these
-    // are int8 CODES, so the sums are exact integers in a double (|sum| <= 127*4608 << 2^53).
+    // SmoothQuant zero-point needs Sum(w_int) over in-image taps. Pre-sum the icl axis once per conv so the row pass
+    // costs one add per tap. Exact: int8 codes sum exactly in a double.
     std::vector<double> kwsum;
     if (c.asym) {
         kwsum.assign((size_t)c.oc * ktap, 0.0);
@@ -180,16 +158,8 @@ inline Tensor conv2d(const Tensor& x, const ConvW& c) {
                 for (int t = 0; t < ktap; ++t) kwsum[(size_t)o * ktap + t] += (double)wp[t];
             }
     }
-    // Loop order: the reduction axes (icl, kh, kw) are OUTSIDE and the output column `ow` is innermost,
-    // accumulating into a per-row buffer. The obvious order (ow outermost, icl innermost) reads
-    // X(ic, ih, iw) with a stride of H*W floats, so a 1x1 conv touches a fresh cache line on EVERY MAC
-    // -- measured 0.31 GMAC/s vs 0.76 for 3x3, and 65% of total C-sim runtime sat in the 1x1 nest.
-    // Walking `ow` innermost makes the input read contiguous (unit stride for sw=1) and vectorizable.
-    // Bit-exact: for a fixed output element the additions still occur in icl -> kh -> kw order, exactly
-    // as before, and (double)float * (double)float is exact so FMA contraction cannot change it.
-    // This is also the right shape for synthesis: the innermost loop writes distinct accrow[ow], so it
-    // carries no dependency and admits #pragma HLS PIPELINE II=1, whereas accumulating into one scalar
-    // `acc` bounds II by the adder latency.
+    // Reduction axes outside, output column ow innermost: unit-stride, vectorizable input reads.
+    // Bit-exact: each output still sums in icl -> kh -> kw order, and float*float is exact in double.
     CSIM_OMP_STATIC
     for (int oc = 0; oc < c.oc; ++oc) {
         const int g   = oc / ocpg;
@@ -197,8 +167,7 @@ inline Tensor conv2d(const Tensor& x, const ConvW& c) {
         // dequant/BN scale for this output channel: INT8 -> sa*sw[oc]; FP32 -> folded BN scale (or 1)
         const float sc = c.quant ? (c.sa * c.wsc[oc]) : (c.has_bn ? c.s[oc] : 1.f);
         const float bs = c.b.empty() ? 0.f : c.b[oc];
-        // perch is depthwise-only (loader-enforced), so this conv's single accumulated input channel
-        // is ic0 == oc and one step/lo pair governs the whole dequant for this output channel.
+        // perch is depthwise-only, so one step/lo pair (input channel ic0 == oc) governs this output's dequant.
         const float step_o = c.step_of(ic0);
         const float lo_o   = c.lo_of(ic0);
         std::vector<double> accrow(OW), accwrow(c.asym ? (size_t)OW : 0);
@@ -235,9 +204,8 @@ inline Tensor conv2d(const Tensor& x, const ConvW& c) {
                     }
                 }
             }
-            // SmoothQuant asymmetric: real = sw*(step*Sum(w_int*q) + lo*Sum_valid(w_int)) + bias.
-            // The valid-tap weight sum makes padded borders contribute real 0.0 (not `lo`), matching
-            // OV exactly; folding lo into a constant bias errs at borders (and propagates).
+            // SmoothQuant: real = sw*(step*Sum(w_int*q) + lo*Sum_valid(w_int)) + bias.
+            // Summing only valid taps makes padding contribute 0.0, not lo.
             float* yr = &y.d[((size_t)oc * OH + oh) * OW];
             for (int ow = 0; ow < OW; ++ow) {
                 float v = c.asym ? (float)(c.wsc[oc] * (step_o * accrow[ow] + lo_o * accwrow[ow])) + bs
@@ -337,9 +305,7 @@ inline Tensor conv2d_cat(const std::vector<Src>& xs, const ConvW& c, const Pre& 
     return p.size() == 1 ? conv2d(*p[0], c) : conv2d(concat(p), c);
 }
 
-// Elementwise add (residual). a,b same shape -- checked, because the loop is bounded by a's size and
-// a narrower b would be read past its end (silently wrong output, exit 0), the same failure mode the
-// SPPF residual and the truncated-weight-file checks already guard against.
+// Elementwise add (residual). Shapes checked: a narrower b would be read past its end.
 inline Tensor add(const Tensor& a, const Tensor& b) {
     Y26_PROF("add");
     CSIM_HOST_ASSERT(a.C == b.C && a.H == b.H && a.W == b.W,
@@ -362,15 +328,10 @@ inline Tensor slice_ch(const Tensor& x, int c0, int n) {
     return y;
 }
 
-// C2PSA/PSABlock Attention (ultralytics block.Attention). dim = x.C.
+// C2PSA/PSABlock attention (ultralytics block.Attention), dim = x.C.
 //   num_heads = max(dim/64, 1); head_dim = dim/num_heads; key_dim = head_dim/2; scale = 1/sqrt(key_dim)
-//   qkv(x) -> view[nh, 2*key_dim+head_dim, N] split q,k,v
-//   attn = softmax_{n2}( (q*scale)^T @ k );  out = (v @ attn^T) + pe(v);  return proj(out)
-// `fq` carries the five interior quantizers OV applies (q*scale, k, softmax, v->matmul, v->pe).
-// A default-constructed AttnFQ is all-off and every FQ is the identity, which reproduces the Phase-3
-// FP32-interior behaviour exactly -- so weight dirs without an attn_fq.txt still run unchanged.
-// The q@k product and the softmax itself stay FP32 on purpose: OV puts no FakeQuantize on the MatMul
-// output and its SoftMax is a float op, so a fully-integer attention would NOT match the reference.
+//   attn = softmax((q*scale)^T @ k);  out = (v @ attn^T) + pe(v);  return proj(out)
+// fq: OpenVINO's five interior quantizers (default all-off = FP32). q@k and softmax stay FP32, as in OpenVINO.
 inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, const ConvW& pe,
                         const AttnFQ& fq = AttnFQ()) {
     Y26_PROF("attention (matmul+softmax)");
@@ -380,28 +341,22 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
     const int key_dim   = head_dim / 2;            // attn_ratio 0.5
     const float scale   = 1.f / std::sqrt((float)key_dim);
     const int per_head  = 2 * key_dim + head_dim;  // channels per head in qkv output
-    // num_heads/head_dim/key_dim are derived from the INPUT width, but every q/k/v index below assumes
-    // qkv's OUTPUT is exactly nh*per_head wide. That holds because compaction protects the attention
-    // convs (verified: ic=256 -> oc=512 in both the dense and the compacted+folded manifests), but it
-    // is load-bearing and silent if broken -- a compacted qkv would mis-slice every head.
+    // Head sizes come from the input width; every q/k/v index assumes qkv's output is exactly nh*per_head wide.
     CSIM_HOST_ASSERT(qkv.oc == num_heads * per_head, "attention: qkv oc=" + std::to_string(qkv.oc) +
                      " but num_heads*per_head=" + std::to_string(num_heads * per_head));
 
     Tensor q = conv2d(x, qkv);                     // [nh*per_head, H, W]
-    // Pre-quantize the matmul operands. OV scales q BEFORE quantizing it (the FakeQuantize sits on
-    // the output of the *scale Multiply), so the scale must be folded in here rather than applied to
-    // the q@k product afterwards -- same math, but a different quantization boundary.
+    // q is scaled BEFORE it is quantized (OpenVINO's FakeQuantize follows the scale Multiply).
     std::vector<float> qs((size_t)num_heads * key_dim * N), ks(qs.size()),
                        vm((size_t)num_heads * head_dim * N);
-    // Divide-free FQ::apply (bit-identical, ps-notes §12), one channel per iteration across the cores.
+    // Divide-free FQ::apply (bit-identical), one channel per iteration.
     CSIM_OMP_STATIC
     for (int hd = 0; hd < num_heads * key_dim; ++hd) {
         const int hh = hd / key_dim, d = hd % key_dim;
         fq.q.apply(&qs[(size_t)hd * N], &q.d[(size_t)(hh * per_head + d) * N], N, 1, scale);
         fq.k.apply(&ks[(size_t)hd * N], &q.d[(size_t)(hh * per_head + key_dim + d) * N], N);
     }
-    // v reshaped back to [C,H,W] for pe(): channel = head*head_dim + vd. v is quantized TWICE with
-    // separately calibrated ranges -- v_mm for the v@attn^T matmul, v_pe for pe(v).
+    // v as [C,H,W] for pe(): channel = head*head_dim + vd. v has two quantizers: v_mm (matmul) and v_pe (pe).
     Tensor vt(C, H, W);
     CSIM_OMP_STATIC
     for (int hv = 0; hv < num_heads * head_dim; ++hv) {
@@ -418,9 +373,7 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
         const float* qh = &qs[(size_t)(hh * key_dim) * N];
         const float* kh = &ks[(size_t)(hh * key_dim) * N];
         const float* vh = &vm[(size_t)(hh * head_dim) * N];
-        // QB queries at a time, P laid out [n2][QB]: every inner loop is unit-stride over the block, so
-        // it vectorizes WITHOUT reassociating - each score/acc still sums kd (resp. n2) in ascending order,
-        // bit-identical to the one-query-at-a-time loop (3.7x on the PC, 1 thread, 256ch @ 20x20).
+        // QB queries at a time, P laid out [n2][QB]: unit-stride inner loops vectorize without reordering any sum.
         constexpr int QB = 8;
         std::vector<float> P((size_t)N * QB);
         for (int n0 = 0; n0 < N; n0 += QB) {

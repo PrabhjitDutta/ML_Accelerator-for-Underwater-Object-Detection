@@ -1,14 +1,8 @@
                       
-"""Resumable fine-tune of a *pruned* YOLO26s init (accuracy recovery after channel pruning).
+"""Resumable fine-tune of a pruned checkpoint (from prune_yolo26s.py) to recover accuracy, with a lower
+lr0 and a cosine schedule. Same resume logic as train_ft_resumable.py.
 
-Same idempotent/resumable contract as train_ft_sweep.py, but the starting weights are a pruned
-checkpoint produced by prune_yolo26s.py (whose channel counts differ from stock yolo26s) rather than
-the fixed COCO-pretrained model. A crash-retry loop calls this until it exits 0; it decides what to do
-from the on-disk state of the run dir. Gentle recovery recipe (lower lr0 + cosine) since pruning
-perturbs the weights and the model must re-heal.
-
-  conda run -n ueaod python training/yolo26s/train_prune_finetune.py \
-      --init runs/prune_r30/pruned_init.pt --data <yaml> --name prune_r30 \
+  python model_python/scripts/train_prune_finetune.py --init <pruned_init.pt> --data <yaml> --name <run>
       [--epochs 200] [--patience 50] [--lr0 0.005]
 """
 import argparse
@@ -22,7 +16,6 @@ SWEEP_DATA = ROOT / "dataset/urpc2018_yolo/urpc2018_sweep.yaml"
 FULL_DATA = ROOT / "dataset/urpc2018_yolo/urpc2018.yaml"
 PROJECT = ROOT / "training/yolo26s/runs"
 
-
 def is_resumable(p: Path) -> bool:
     """True only if the checkpoint carries live training state (not a stripped/finalized ckpt)."""
     if not p.exists():
@@ -33,7 +26,6 @@ def is_resumable(p: Path) -> bool:
         print(f"[prune-ft] could not read {p}: {e}")
         return False
     return ck.get("epoch", -1) != -1 and ck.get("optimizer") is not None
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -77,7 +69,6 @@ def main():
     )
     run.mkdir(parents=True, exist_ok=True); done.touch()
     print(f"PRUNE_FT_DONE {args.name}")
-
 
 if __name__ == "__main__":
     main()

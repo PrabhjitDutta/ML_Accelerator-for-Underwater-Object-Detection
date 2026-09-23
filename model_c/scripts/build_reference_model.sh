@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Build the C++ reference model with g++ (no Vitis needed), run it on the reference frame, and check every layer
-# output against reference_dumps/int8_shipping_model/ byte for byte.
+# Build the C++ reference model (no Vitis needed), run it on the reference frame, and check every layer output
+# against reference_dumps/int8_shipping_model/ byte for byte.
 #   bash model_c/scripts/build_reference_model.sh
-# Binaries land in model_c/build/:
-#   yolo26_csim         the full model (both detection heads). YOLO26_HEADS_ONLY=1 skips the per-layer dumps.
-#   yolo26_csim_deploy  the one2many head compiled out (-DYOLO26_NO_O2M): the deployment shape the FPGA runs.
-#                       Flags otherwise identical on purpose, so its o2o dumps equal yolo26_csim's.
-#   decode_test         the ARM-side detection decoder (reference_model/detection_decode.h) on its own.
-# The weights mode (FP32 / INT8 / SmoothQuant, channel-compacted) is detected from the weights dir itself.
+# Binaries in model_c/build/:
+#   yolo26_csim         the full model (both heads). YOLO26_HEADS_ONLY=1 skips the per-layer dumps.
+#   yolo26_csim_deploy  -DYOLO26_NO_O2M (the deployed shape); otherwise identical, so its o2o dumps match.
+#   decode_test         the detection decoder (reference_model/detection_decode.h) on its own.
+# The weights mode is detected from the weights dir.
 set -euo pipefail
 M="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "$(uname -s)" in MINGW*|MSYS*) export PATH="/c/msys64/ucrt64/bin:$PATH";; esac

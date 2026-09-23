@@ -1,29 +1,6 @@
-// conv_engine_top.cpp - Step 1 item 4: the AXI top-level interface (the PL<->PS handoff).
-//
-// This file is the SYNTHESIS BOUNDARY and nothing else. It holds no arithmetic: it re-assembles the
-// flattened AXI arguments into a Y26ConvCfg and calls the datapath. Keeping the boundary in its own
-// translation unit means the interface can be re-shaped (bundles, depths, burst behaviour) without
-// touching the bit-exact-gated kernel, which is the file we must not perturb casually.
-//
-// Interface plan:
-//   * m_axi   - every buffer (activations, weights, per-channel scale vectors, output). These live in
-//               DDR; the PS stages them there and the PL bursts them in. Weights get their own bundle
-//               so weight streaming (design target 2) can overlap activation traffic rather than
-//               contend with it - that separation is exactly what makes the measured 0.1-2.1%
-//               streaming cost achievable.
-//   * s_axilite - all scalars plus the buffer base addresses (`offset=slave`) and the ap_ctrl block.
-//               One `control` bundle, which is what the PS driver pokes to launch the kernel.
-//
-// Why the config struct does not cross the boundary: Y26ConvCfg holds POINTERS (wsc, bias, step_v,
-// lo_v). s_axilite carries scalars, m_axi carries buffers; a struct-of-pointers is neither. So the
-// top takes a flattened signature and rebuilds the struct on the PL side, where the pointers are just
-// local addresses into the m_axi space.
-//
-// Scope note: this is the PER-CONV top, which is the right granularity to synthesize and measure
-// first (and mirrors htdet's per-block bring-up). The whole-trunk top - which is where
-// `#pragma HLS DATAFLOW` between layers belongs, and where the resident activation buffers sized by
-// Y26_ACT_BUF_ELEMS get instantiated - arrives with the trunk graph. DATAFLOW is deliberately NOT
-// applied here: there is only one stage to pipeline, so it would be a no-op with a false implication.
+// AXI top level (the synthesis top). No arithmetic: rebuilds Y26ConvCfg from the flattened AXI arguments and
+// calls the datapath. m_axi: every buffer, in DDR. s_axilite (bundle control): scalars, buffer base addresses,
+// ap_ctrl. Y26ConvCfg holds pointers, which neither interface can carry, so it is rebuilt here.
 #include "conv_engine.h"
 
 void y26_conv_top(const y26_xw_t*  X,
@@ -42,44 +19,19 @@ void y26_conv_top(const y26_xw_t*  X,
                   , int yq, const float* q_s, const float* q_lo, const float* q_st
 #endif
                   ) {
-    // ---- buffers: separate bundles so weight and activation traffic do not serialise ----
-    // depth= is required for CO-SIMULATION only and does not affect the generated hardware; see the
-    // Y26_DEPTH_* block in conv_engine.h for what each bound is and why it must be the design maximum.
-    //
-    // gmem_act CARRIES 90.5% OF ALL DRAM LATENCY EXPOSURE (notes §1q, measured 2026-08-18):
-    //   slope = icpg*H*W/8 + oc*OH + oc   cycles of cost per cycle of DRAM latency,
-    // and the leading activation-staging term is 3,228,650 of a 3,566,482 frame total. Yet this
-    // port had NO `latency=` and NO `num_read_outstanding=` at all - the pair was applied to
-    // gmem_wt only (see the block below), back when weight traffic looked like the bottleneck.
-    //
-    // The `/8` is almost certainly the EFFECTIVE IN-FLIGHT DEPTH of this port, not burst
-    // granularity: the same back-solve on gmem_wt put its effective depth at ~7 for exactly the
-    // same reason - HLS schedules against `latency=0`, builds a shallow pipeline, and then only a
-    // handful of reads are ever outstanding no matter how large the outstanding budget is.
-    // If that reading is right, raising `latency=` should raise the divisor and cut the staging
-    // term roughly in proportion. FALSIFIABLE: gate conv slope 3,200 should fall to ~1,700.
-    //
-    // Both ports of the bundle get identical options; per-bundle settings must not conflict.
+    // Buffers: separate bundles so weight and activation traffic do not serialize.
+    // depth= is for co-simulation only (see Y26_DEPTH_* in conv_engine.h).
+    // latency= tells HLS the DRAM latency so it pipelines deep enough to keep reads in flight.
+    // Both ports of a bundle get identical options.
 #ifndef Y26_ACT_LATENCY
 #define Y26_ACT_LATENCY 30
 #endif
-// num_read_outstanding is a KNOB since 2026-08-18 because notes 1r.1 measured it to be the BINDING
-// constraint. The staging divisor is min(pipeline_depth - 7, num_read_outstanding); at
-// Y26_ACT_LATENCY=30 the depth term bound (37), at 60 and 100 the OUTSTANDING term bound, flat at
-// 64, and the slope refused to move below 1,408 no matter how deep the pipeline got (L=100 built a
-// 114-deep pipeline and bought exactly zero). Raising this alone will NOT help unless
-// Y26_ACT_LATENCY is raised with it - whichever term is smaller wins, which is the whole content of
-// the min(). Costs BRAM in the AXI read adapter (FIFO depth scales with outstanding x burst
-// length), and csynth UNDER-reports BRAM by ~22%, so check the post-route number, not this one.
+// Reads in flight = min(pipeline depth, num_read_outstanding): raise it together with Y26_ACT_LATENCY.
+// Costs BRAM in the AXI read adapter.
 #ifndef Y26_ACT_NRO
 #define Y26_ACT_NRO 64
 #endif
-// The OUTPUT port needs its own knobs, and needs them more than gmem_act does now. After the bundle
-// split (notes 1t) the gate-conv slope decomposes as staging ~1 + oc*OH 1,024 + oc 128 = 1,153, so
-// 89% of what is left is the Y WRITE. And gmem_out is WRITE_ONLY, which means the
-// num_read_outstanding applied to it is INERT - the only outstanding number that can matter there is
-// num_write_outstanding, which was sitting at the tool default of 16, untouched, on the term that
-// now dominates. Defaults below reproduce the measured 1,153 exactly.
+// gmem_out is write-only, so only num_write_outstanding matters here.
 #ifndef Y26_OUT_NWO
 #define Y26_OUT_NWO 16
 #endif
@@ -90,24 +42,8 @@ void y26_conv_top(const y26_xw_t*  X,
 #define Y26_PRAGMA_STR2(x) #x
 #define Y26_PRAGMA_STR(x)  Y26_PRAGMA_STR2(x)
 #endif
-    //
-    // ---- BUNDLE SPLIT (Y26_SPLIT_OUT, default OFF) -------------------------------------------
-    // MEASURED 2026-08-18, csynth with Y26_WIDEN=512 (notes 1s). Putting X (int8) and Y (float) on
-    // ONE bundle forces the port to the WIDER type, 32 bits. The csynth burst table then says:
-    //
-    //   m_axi_gmem_act | X | read | Fail | Inferred burst reverted due to burst accesses data
-    //                                      width is different from m_axi port width
-    //
-    // and X is ABSENT from the Inferred Burst Summary entirely. So the hottest read in the design -
-    //     for (j = 0; j < hw; ++j) xbuf[l][dst0 + j] = X[src0 + j];
-    // which is contiguous, unit-stride, and the term that was 90.5% of frame DRAM exposure - is
-    // issuing SINGLE-BEAT 8-bit reads. Not a widening problem; a plain bursting problem, and it has
-    // been there since the bundles were first drawn.
-    //
-    // Splitting Y onto its own bundle makes gmem_act an 8-bit port that MATCHES the access width.
-    // Costs one more AXI master (and one more connection in the Vivado BD later) - noted, not free.
-    //
-    // OFF by default so every measurement recorded before this date reproduces unchanged.
+    // Y26_SPLIT_OUT: Y on its own bundle. A shared bundle is as wide as its widest type (float Y, 32 bits),
+    // which blocks bursting the 8-bit X reads.
 #ifdef Y26_SPLIT_OUT
     _Pragma(Y26_PRAGMA_STR(HLS INTERFACE m_axi port=X offset=slave bundle=gmem_act
                            depth=Y26_DEPTH_XW num_read_outstanding=Y26_ACT_NRO latency=Y26_ACT_LATENCY))
@@ -120,44 +56,9 @@ void y26_conv_top(const y26_xw_t*  X,
     _Pragma(Y26_PRAGMA_STR(HLS INTERFACE m_axi port=Y offset=slave bundle=gmem_act
                            depth=Y26_DEPTH_YW num_read_outstanding=Y26_ACT_NRO latency=Y26_ACT_LATENCY))
 #endif
-    // num_read_outstanding RAISED 16 -> 64 on 2026-08-18. MEASURED justification: a cosim stall
-    // sweep (`Y26_USER_STALL`, delay injected on `gmem_wt rd` only, 64 lanes) gave 463,020 /
-    // 813,228 / 2,287,788 cycles at 0 / 20 / 100 cycles of read delay - i.e. latency is LINEAR in
-    // DRAM read latency at ~18,400 cycles per cycle of delay. The per-lane weight hoist issues
-    // Y26_LANES reads per (icb, tap) tile, so with only 16 outstanding the loop cannot cover the
-    // latency; back-solving the slope put the EFFECTIVE depth at ~7. Since the slope is set by the
-    // outstanding depth, raising it divides the penalty - and this is a pragma, not a datapath
-    // change. See notes/yolo26s-zu9eg-measurements.md 1d.
-    //
-    // This does NOT fix the underlying problem, which is that the hoist sits inside the `oh` loop
-    // and re-fetches the same weights once per output row (OH-fold redundant traffic). That is
-    // design target 2 / on-chip weight staging, and it removes ~87% of the reads outright. The two
-    // compose; do not treat this pragma as a substitute.
-    //
-    // Costs buffering in the AXI read adapter (FIFO depth scales with outstanding), so re-check
-    // post-route BRAM/LUT after changing it - it is not free, it is just cheap.
-    //
-    // *** num_read_outstanding ALONE DOES NOTHING - MEASURED. *** Raising it 16 -> 64 changed the
-    // d=20 stall figure by ZERO cycles (813,228 before and after), while the csynth M_AXI table
-    // confirmed the setting HAD applied (Num Read Outstanding 64 on gmem_wt, 16 elsewhere). The
-    // limit was never the AXI config: the hoist loop is scheduled at ITERATION LATENCY 14, II=1,
-    // so at most ~14 reads are ever in flight and a larger outstanding budget goes unused.
-    //
-    // The pipeline is 14 deep because HLS schedules against `Latency 0` on this port - it does not
-    // know memory is slow. `latency=` is what tells it, and it is the knob that actually matters:
-    // HLS then builds a pipeline deep enough to cover that many cycles, which is what lets the
-    // outstanding budget above get used. The two only work TOGETHER - a deep pipeline needs the
-    // outstanding capacity to feed it, and outstanding capacity needs the depth to issue into.
-    //
-    // 30 is chosen to match plausible ZynqMP HP-port -> DDR4 read latency (~100-160 ns, i.e. 25-40
-    // cycles at 250 MHz), NOT tuned to the synthetic stall values. Setting it far above the real
-    // latency costs pipeline depth (FF/LUT) and a longer per-tile drain for no benefit.
-    //
-    // SWEEPABLE since 2026-08-18, via -DY26_WT_LATENCY=<n>. It is a knob and not a constant because
-    // its right value DEPENDS ON WHO IS READING: with the hoist reading DRAM directly, a deep
-    // pipeline was the whole point; with weights staged on-chip, gmem_wt is touched only by the
-    // per-oc staging copy and the tradeoff changes completely. Written through _Pragma because HLS
-    // does not macro-expand inside a plain #pragma.
+    // latency= makes HLS pipeline deep enough to cover DRAM latency; num_read_outstanding lets those reads be in
+    // flight. Neither helps alone. Default 30 cycles ~ ZynqMP HP-port DDR4 read latency at 250 MHz.
+    // _Pragma because HLS does not macro-expand inside #pragma.
     #ifndef Y26_WT_LATENCY
     #define Y26_WT_LATENCY 30
     #endif
@@ -179,7 +80,7 @@ void y26_conv_top(const y26_xw_t*  X,
     #pragma HLS INTERFACE s_axilite port=yq   bundle=control
 #endif
 
-    // ---- base addresses + scalars + control ----
+    // Base addresses, scalars, control.
     #pragma HLS INTERFACE s_axilite port=X      bundle=control
     #pragma HLS INTERFACE s_axilite port=Y      bundle=control
     #pragma HLS INTERFACE s_axilite port=Wt     bundle=control

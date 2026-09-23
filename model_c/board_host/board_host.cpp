@@ -1,52 +1,32 @@
-// board_host.cpp - ZCU102 host for the shipping YA128 kernel (bringup/ya128_250_h, impl_2).
+// ZCU102 host for the shipping kernel (FPGA/4_bitstream).
+// With -DY26_BOARD, conv2d() (layer_ops.h) sends every SmoothQuant integer conv (c.quant && c.asym) here; the
+// rest of the trunk (FP32 attn.pe convs, attention, upsample, concat, head) runs on the A53s.
+//   ./y26_board <weights_dir> <input.bin> <dump_dir>
+//   ls frames/*.bin | ./y26_board <weights_dir> - <out_dir>     frame loop, one timing line per frame
 //
-// Hooks the single conv choke point: with -DY26_BOARD, conv2d() (layer_ops.h) sends every
-// SmoothQuant integer conv (c.quant && c.asym - the tb gates' eligibility) here. The rest of the
-// trunk - FP32 attn.pe convs, attention, upsample, concat, head - stays on the A53s, unchanged.
-// Entry point is the existing run_model.cpp:  ./y26_board <weights_dir> <input.bin> <dump_dir>
-//   or the frame loop:  ls frames/*.bin | ./y26_board <weights_dir> - <out_dir>   (steady state from frame 1 on:
-//   weights packed and buffer pages faulted once; one split line per frame, the exit table is the last frame's)
-//
-// The host->DDR layout is the tb's (conv_engine_tb.cpp), written as the raw byte image the m_axi ports
-// read: X = uint8 codes, ic*H*W flat; Wt = int8 codes at Y26_WIDX() inside Y26_WSTRIDE() per oc;
-// wsc/bias/step_v/lo_v = float; Y = float at the padded row stride YS.
-//
-// ONE buffer, one heap (Arena): every Tensor's storage (NoInitAlloc -> y26_tensor_alloc), each conv's X codes
-// (freed after its run), and every conv's weights + scales (from the top, packed ONCE on first use, never
-// freed). The kernel writes Y straight into the output tensor when that tensor is in the buffer and its rows
-// are unpadded (YS == OW) - no unpack copy; else into a scratch Y that is unpacked. A full buffer falls back
-// to the plain heap (still correct, just copies); the summary prints the peak so the buffer can be sized.
-// Async (default; Y26_ASYNC=0 or Y26_BOARD_CHECK turns it off): the trunk runs independent branches on
-// threads (yolo26_network.cpp fork); the kernel is one mutex, so one branch's PS work overlaps another's conv.
+// DDR layout (as the testbench): X = uint8 codes, ic*H*W; Wt = int8 codes at Y26_WIDX() inside Y26_WSTRIDE() per
+// oc; wsc/bias/step_v/lo_v = float; Y = float at row stride YS.
+// One DMA buffer, one first-fit heap (Arena): tensor storage, each conv's X codes (freed after the run) and every
+// conv's weights (packed once on first use, never freed). The kernel writes Y straight into the output tensor
+// when it is in the buffer with unpadded rows; otherwise into a scratch Y that is unpacked. A full buffer falls
+// back to the heap (correct, slower). Async (default): independent branches run on threads; the kernel is one
+// mutex, so one branch's PS work overlaps another's conv.
 //
 // Backends:
-//   -DY26_BOARD_SIM  : the buffer is host memory and the C-model y26_conv_top() reads it, reinterpreted as
-//                      port words. So a SIM run checks everything here except the silicon and the bus.
-//   default (board)  : needs root, the bitstream loaded, PL0 at 250 MHz, and a DDR buffer the kernel owns:
-//     Y26_UDMABUF=udmabuf0     PREFERRED. Cached u-dma-buf buffer (ikwzm u-dma-buf module); packed in place,
-//                              cache-synced per run. e.g. insmod u-dma-buf.ko udmabuf0=67108864.
-//     Y26_BUF_PHYS/_SIZE       Fallback, no module: O_SYNC /dev/mem, UNCACHED. Packs into a host mirror and
-//                              copies X / Y through Device memory every conv - expect it to dominate.
-//   Y26_BOARD_CHECK=<substr> (board only): convs whose name contains <substr> are ALSO run through the
-//                      C-model and compared bit-for-bit ('.' = all; the whole frame's C-model is ~9 s on
-//                      the PC, expect a few x that on the A53s).
-//   Y26_PACK_MT=<elements>  pack X uses OpenMP threads when a conv's X has >= this many elements (default 1048576,
-//                      the PC optimum; 5 convs). Board: sweep 1048576 / 262144 / 65536 in the frame loop, keep the
-//                      lowest `pack X` on frames >= 1. The first conv prints the OpenMP thread count - "OpenMP OFF"
-//                      means the build had no -fopenmp and pack X + attention are single-core.
-//   Y26_PACK_SCHED=dynamic  pack X's OpenMP schedule (default static). Sweep it with Y26_PACK_MT when async is on.
-//   Y26_COHERENT=1     ONLY with overlay_coh/ (ps-notes 7): X/Y on coherent HPC ports, their cache syncs skipped.
-//
-// Board run (root; y26_zcu102.bit + .hwh side by side, bringup/ya128_250_h/overlay):
-//   python3 -c "from pynq import Overlay; Overlay('y26_zcu102.bit')"   # or fpgautil -b; sets PL0
-//   PL0 must read ~249975000 Hz (the .hwh's 249.975 MHz), else the timings are not the design's.
-//   Buffer: >= 64 MB (PC peak 50 MB: tensors + X + weights; the summary prints it) - smaller still runs, with copies. A /dev/mem window must be memory Linux
-//   does NOT own - a device-tree reserved-memory node with no-map, e.g. 64 MB at 0x60000000. Then:
-//   YOLO26_HEADS_ONLY=1 Y26_UDMABUF=udmabuf0 ./y26_board weights input.bin dumps
-//   YOLO26_HEADS_ONLY=1 Y26_BUF_PHYS=0x60000000 Y26_BUF_SIZE=0x4000000 ./y26_board weights input.bin dumps
-//   YOLO26_HEADS_ONLY=1 writes only the 3 o2o head maps (not ~45 MB of per-layer debug dumps) and skips the
-//   duplicate layer-10 attention tap (100 kernel convs, not 102). Add Y26_BOARD_CHECK=. on the first run.
-//   The exit summary splits every conv into pack / in / kernel / out, and the PS time between convs.
+//   -DY26_BOARD_SIM  the buffer is host memory and the C-model y26_conv_top() reads it (everything but silicon).
+//   default (board)  root, bitstream loaded, PL0 at 250 MHz, and a DDR buffer the kernel owns:
+//     Y26_UDMABUF=udmabuf0   preferred: cached u-dma-buf buffer, cache-synced per run
+//                            (insmod u-dma-buf.ko udmabuf0=67108864).
+//     Y26_BUF_PHYS/_SIZE     fallback: uncached O_SYNC /dev/mem on a reserved-memory (no-map) window;
+//                            X and Y are copied through Device memory every conv.
+// Environment:
+//   Y26_BOARD_CHECK=<substr>  also run matching convs ('.' = all) through the C-model and compare bit for bit.
+//   Y26_PACK_MT=<elements>    pack X with OpenMP when a conv's X has >= this many elements (default 1048576).
+//   Y26_PACK_SCHED=dynamic    pack X's OpenMP schedule (default static).
+//   Y26_COHERENT=1            only with a bitstream that puts X/Y on coherent HPC ports: skip their cache syncs.
+//   YOLO26_HEADS_ONLY=1       write only the 3 o2o head maps.
+// Load the bitstream with pynq Overlay('y26_zcu102.bit') or fpgautil (the .hwh beside it); PL0 must read
+// ~249975000 Hz. The exit summary splits every conv into pack / in / kernel / out plus PS time between convs.
 #include "../hls_kernel/conv_engine.h"
 #include "../reference_model/layer_ops.h"
 #include <chrono>
@@ -243,9 +223,8 @@ struct Buf {
     bool cmd = false;                // Y26_SYNC_CMD=1: one packed write per sync
     bool coh = false;                // Y26_COHERENT=1 (cached buffer only): X/Y ride the coherent HPC ports, no sync
     Buf() {
-        // Y26_UDMABUF=<name> (e.g. udmabuf0, from the u-dma-buf kernel module): a CACHED DMA buffer. The HP
-        // ports are not cache-coherent, so every run is bracketed by explicit cache maintenance (sync()).
-        // Default: Y26_BUF_PHYS/Y26_BUF_SIZE through O_SYNC /dev/mem - uncached, needs no module.
+        // Y26_UDMABUF=<name>: a cached DMA buffer. The HP ports are not cache-coherent, so every run is bracketed by
+        // cache maintenance (sync()). Default: Y26_BUF_PHYS/Y26_BUF_SIZE through uncached O_SYNC /dev/mem.
         const char* u = std::getenv("Y26_UDMABUF");
         int fd;
         if (u && *u) {
@@ -281,8 +260,8 @@ struct Buf {
             fdev = opn("sync_for_device"); fcpu = opn("sync_for_cpu");
             const char* sc = std::getenv("Y26_SYNC_CMD");
             cmd = sc && std::strcmp(sc, "1") == 0;
-            // ONLY with the bd.tcl `coh` bitstream (gmem_act/out on HPC0/1, AxCACHE 1111, AxPROT 010) and CCI
-            // snooping on. Weights stay on non-coherent HP1/HP3 and keep their sync. Prove it once with Y26_BOARD_CHECK=.
+            // Only with a bitstream that puts gmem_act/out on coherent HPC ports, with CCI snooping on. Weights stay on
+            // non-coherent ports and keep their sync. Check once with Y26_BOARD_CHECK=.
             const char* co = std::getenv("Y26_COHERENT");
             coh = co && std::strcmp(co, "1") == 0;
         }
@@ -295,7 +274,7 @@ struct Buf {
         if (r == MAP_FAILED || d == MAP_FAILED) throw std::runtime_error("mmap failed");
         reg = static_cast<volatile uint32_t*>(r);
         map = static_cast<uint8_t*>(d);
-        // u-dma-buf maps page by page on fault: take all ~16K faults here, once, not inside the frames.
+        // u-dma-buf maps pages on fault: take all the faults here, once.
         if (!ub.empty()) for (size_t i = 0; i < size; i += 4096) (void)*reinterpret_cast<volatile const uint8_t*>(map + i);
         if (ub.empty()) { mirror.assign(size / 8, 0); host = reinterpret_cast<uint8_t*>(mirror.data()); }
         else host = map;
@@ -303,10 +282,8 @@ struct Buf {
                     (unsigned long long)phys, size);
     }
     // u-dma-buf cache maintenance on [off, off+n). dir: 1 = to device (clean), 2 = from device (invalidate).
-    // The sysfs files stay open: one pwrite each (fopen/fprintf/fclose per value was ~1,200 opens a frame).
-    // Y26_SYNC_CMD=1: ONE write, u-dma-buf's packed command "0x<offset:32><size&~15 | dir<<2 | 1>" (size rounded
-    // up to 16 B - cache ops are line-granular anyway). Only for a driver that parses it: an old one would sync
-    // its stored range instead - run Y26_BOARD_CHECK=. with it once before trusting it.
+    // The sysfs files stay open (one pwrite each). Y26_SYNC_CMD=1: one write of u-dma-buf's packed command
+    // "0x<offset:32><size&~15 | dir<<2 | 1>", only for a driver that parses it (check with Y26_BOARD_CHECK=.).
     static void wr(int f, const char* s) {
         const ssize_t k = (ssize_t)std::strlen(s);
         if (pwrite(f, s, k, 0) != k) throw std::runtime_error("u-dma-buf sync write failed");
@@ -361,10 +338,9 @@ struct Buf {
         w32(0xa4, c.ph);       w32(0xac, c.pw);       w32(0xb4, c.groups);  w32(0xbc, c.act);
         w32(0xc4, c.perch ? 1 : 0);  wf(0xcc, c.sa);  wf(0xd4, c.lo);
 #ifdef Y26_YQ8
-        // PROVISIONAL until checked against sol_YQ8's xy26_conv_top_hw.h (args appended after lo, Vitis layout).
+        // Offsets of the yq/qs/qlo/qst registers: verify against the driver header (xy26_conv_top_hw.h) of the yq build.
         enum { Y26_REG_YQ = 0xdc, Y26_REG_QS = 0xe4, Y26_REG_QLO = 0xf0, Y26_REG_QST = 0xfc };
-        // HW lever B registers - offsets from the sol_YQ8 driver header (xy26_conv_top_hw.h). yq is written on EVERY
-        // run: registers persist, and a float conv after a coded one must not inherit yq=1.
+        // yq is written on every run: registers persist, and a float conv after a coded one must not inherit yq=1.
         w32(Y26_REG_YQ, (uint32_t)L.yq);
         w64(Y26_REG_QS, phys + L.qs);  w64(Y26_REG_QLO, phys + L.qlo);  w64(Y26_REG_QST, phys + L.qst);
 #endif
@@ -373,8 +349,8 @@ struct Buf {
         const auto it = seen.find(&c);
         const auto t0 = clk::now();
         w32(0x00, 1);                                  // ap_start
-        // Async: another branch can use this core while the PL works - sleep through 70% of a >1 ms conv (Linux
-        // oversleeps ~0.1 ms), then spin. Serial runs and frame 1 spin throughout.
+        // Async: another branch can use this core while the PL works, so sleep through 70% of a >1 ms conv, then spin.
+        // Serial runs and the first frame spin throughout.
         if (it != seen.end() && it->second > 1.0 && y26_async())
             std::this_thread::sleep_for(std::chrono::microseconds((long)(it->second * 700)));
         while (!(reg[0] & 2))                          // ap_done (clear-on-read)
@@ -404,23 +380,19 @@ struct Region {
     Region(const Region&) = delete;
 };
 
-// Weights + scales of one conv, packed once at the top of the arena on first use. Keyed by the ConvW, which
-// lives in Weights for the whole run (a conv called twice - the full-dump layer-10 tap - hits the cache).
+// Weights + scales of one conv, packed once at the top of the arena on first use, keyed by the ConvW.
 struct WSlot { size_t wt, wsc, bias, stp, lo, qs, qlo, qst; };
 std::unordered_map<const ConvW*, WSlot> g_wslots;
 std::mutex g_wmu;
 
-// ---- HW lever B (-DY26_YQ8): code-mode edges ------------------------------------------------------------------
-// A conv whose output feeds exactly ONE kernel conv and nothing else (51 edges) runs with yq=1: the kernel writes that
-// consumer's uint8 code (its ssc/lo/step for those channels) into each Y slot, the host narrows the slots to bytes
-// in the output tensor's own storage, and the consumer copies them into X instead of quantizing. The edges below
-// are read off yolo26_network.cpp (2026-09-22); anything else read by an add/slice/concat/maxpool/upsample/decode
-// stays float. A coded tensor reaching any consumer but its own throws (y26_take_codes). The frame's o2o bytes vs
-// reference/ are the end-to-end check. Enabled only by y26_board_weights() (frame loop) AND Y26_YQ=1.
+// -DY26_YQ8 code-mode edges: a conv whose output feeds exactly one kernel conv runs with yq=1. The kernel writes
+// that consumer's uint8 codes into Y, the host narrows the slots to bytes in place, and the consumer copies
+// them into X instead of quantizing. Edges are read off yolo26_network.cpp; a coded tensor reaching any other
+// consumer throws (y26_take_codes). Enabled by y26_board_weights() (frame loop) AND Y26_YQ=1.
 const Weights* g_W = nullptr;
 struct Codes { const ConvW* cons; int off; };
 int g_fuse_checked = 0;                             // fused sources verified by Y26_FUSE_CHECK (exit summary)
-int g_ahead_checked = 0;                            // prepacked / sibling-shared / uint8-table sources verified (§13)
+int g_ahead_checked = 0;                            // prepacked / sibling-shared / uint8-table sources verified
 std::unordered_map<const float*, Codes> g_codes;   // coded tensor storage -> its one consumer
 int g_ncoded = 0;                                   // edges coded this frame (frame line)
 std::mutex g_cmu;
@@ -510,8 +482,8 @@ const WSlot& weights_slot(Buf& B, const ConvW& c) {
 }
 }  // namespace
 
-// Fused sources (Src, layer_ops.h; ps-notes §10) straight to this conv's codes. Each equals quant_plane() of the
-// materialized op, byte for byte (Y26_FUSE_CHECK=1 compares every fused plane against exactly that).
+// Fused sources (Src in layer_ops.h) straight to this conv's codes; each equals quant_plane() of the
+// materialized op, byte for byte (Y26_FUSE_CHECK=1 compares them).
 static void quant_sum(uint8_t* d, const float* a, const float* b, size_t n, float s, float lo, float st) {
     float t[4096];                                 // the residual sum, one cache-resident block at a time
     for (size_t i = 0; i < n; i += 4096) {
@@ -531,9 +503,8 @@ static void quant_up2x(uint8_t* d, const float* a, int h, int w, float s, float 
         std::memcpy(r0 + W2, r0, W2);
     }
 }
-// maxpool(5,1,2) = max over rows then columns, windows clipped at the edges: the -inf pad never wins, the centre is
-// always inside. Max commutes with a monotone q, so pooling the codes == coding the pool. Codes are >= 0, so a row
-// padded with 0s gives the clipped window's max - every loop below is branch-free over x and vectorizes (§13).
+// maxpool(5,1,2) as max over rows then columns. Max commutes with a monotone q, so pooling the codes == coding
+// the pool. Codes are >= 0, so zero padding gives the clipped window's max and every loop is branch-free.
 __attribute__((optimize("vect-cost-model=dynamic")))
 static void pool_pass(uint8_t* __restrict d, uint8_t* __restrict r, uint8_t* __restrict p, int H, int W) {
     for (int y = 0; y < H; ++y) {                  // p = 0 0 row 0 0
@@ -562,10 +533,8 @@ static void quant_pool(uint8_t* d, const float* a, int H, int W, int k, float s,
     for (int it = 0; it < k; ++it) pool_pass(d, r.data(), p.data(), H, W);
 }
 
-// Threads only for big inputs: the quantizer is vectorized, so a parallel region's start-up costs more than a
-// small conv's whole pack (PC A/B, 2026-09-21). 1M threads only 5 convs = 28% of pack X's 27.6M elements/frame;
-// the A53 pays far more per element than the PC, so its break-even is lower. Y26_PACK_MT=<elements> sets the
-// threshold - sweep 1048576 / 262144 / 65536 on the board (frame >= 1 pack X) and keep the fastest.
+// OpenMP only for big inputs: the quantizer is vectorized, so a parallel region costs more than a small conv's
+// whole pack. Y26_PACK_MT=<elements> sets the threshold (tune on the board).
 static size_t pack_mt() {
     static const size_t v = [] {
         const char* e = std::getenv("Y26_PACK_MT");
@@ -580,7 +549,7 @@ static size_t pack_mt() {
     return v;
 }
 
-// ---- §13 levers: X packed ahead, X shared by siblings, uint8 input ----------------------------------------------
+// X packed ahead, X shared by siblings, uint8 input.
 // Same quantizer on every input channel, byte for byte.
 static bool same_quant(const ConvW& a, const ConvW& b) {
     if (a.ic != b.ic || a.ssc.size() != b.ssc.size() || std::memcmp(a.ssc.data(), b.ssc.data(), a.ssc.size() * 4)) return false;
@@ -590,8 +559,8 @@ static bool same_quant(const ConvW& a, const ConvW& b) {
     }
     return true;
 }
-// One PLAIN source packed ahead into its conv's X (y26_board_prepack). The X region is taken at once; the planes are
-// packed on their own thread when async (deferred to the conv otherwise). The conv waits on `done` before its run.
+// One PLAIN source packed ahead into its conv's X (y26_board_prepack), on its own thread when async.
+// The conv waits on `done` before its run.
 struct Y26Pre {
     const ConvW* c; const float* d; int C, ch0; size_t HW;
     std::unique_ptr<Region> xr;
@@ -605,7 +574,7 @@ Pre y26_board_prepack(const Tensor* t, const ConvW& c, bool last) {
     p->ch0 = last ? c.ic - t->C : 0;
     CSIM_HOST_ASSERT(p->ch0 >= 0 && p->ch0 + t->C <= c.ic, "prepack " + c.name + ": source wider than the conv");
     p->xr.reset(new Region(al((size_t)c.ic * p->HW), c.name));
-    const bool coded = y26_take_codes(t, c, p->ch0);   // HW-B: the source arrived as this conv's codes
+    const bool coded = y26_take_codes(t, c, p->ch0);   // the source arrived as this conv's codes (yq)
     const bool bg = y26_async();
     Y26Pre* q = p.get();                           // p owns q and waits on done before it dies
     q->done = std::async(bg ? std::launch::async : std::launch::deferred, [q, coded, bg] {
@@ -622,15 +591,15 @@ Pre y26_board_prepack(const Tensor* t, const ConvW& c, bool last) {
     });
     return p;
 }
-// Sibling convs reading the same tensor through the same quantizer (manifest step/lo + .ssc.bin equal, ps-notes
-// §11): the first to arrive packs X, the other runs on that X. Checked at run time (same_quant, same source).
+// Sibling convs reading the same tensor through the same quantizer: the first to arrive packs X, the other
+// reuses it. Checked at run time (same_quant, same source).
 struct SharedX {
     const ConvW* c; const float* d;
     std::shared_ptr<Region> xr;
     std::promise<void> pr;
     std::shared_future<void> ready;                // set once X is packed and cleaned
 };
-std::unordered_map<int, std::shared_ptr<SharedX>> g_sx;
+std::map<std::pair<int, const float*>, std::shared_ptr<SharedX>> g_sx;   // (pair, source): frames in flight never meet
 std::mutex g_sxm;
 static int sibling_pair(const std::string& n) {
     static const std::unordered_map<std::string, int> P = [] {
@@ -654,10 +623,30 @@ void y26_input_u8(const float* d, std::shared_ptr<const std::vector<uint8_t>> u8
     if (u8) g_u8[d] = std::move(u8); else g_u8.erase(d);
 }
 
+// Img2Col (Qi et al., JRTIP 2025): a dense kxk conv with ic*kh*kw <= Y26_ICGRP whose input zero point is 0 - only
+// 0.conv, the image - runs as a 1x1 conv over the ic*kh*kw shifted planes: 1 MAC step per output pixel, not kh*kw.
+// Bit-exact: the integer sums are the same products; a padding tap becomes code 0 (== q_u8(0.f) at lo == 0), and
+// the zero-point sum it changes is scaled by wsc*lo == 0. The OIHW weights are already [oc][ic*kh*kw]. Y26_IM2COL=0: off.
+const ConvW* im2col_conv(const ConvW& c) {
+    static const bool on = [] { const char* e = std::getenv("Y26_IM2COL"); return !(e && std::strcmp(e, "0") == 0); }();
+    if (!on || c.groups != 1 || c.perch || c.lo != 0.f || c.kh * c.kw == 1 || c.ic * c.kh * c.kw > Y26_ICGRP) return nullptr;
+    static std::mutex m;
+    static std::unordered_map<const ConvW*, std::unique_ptr<ConvW>> made;   // stable: weights_slot keys on the pointer
+    std::lock_guard<std::mutex> g(m);
+    auto& d = made[&c];
+    if (!d) {
+        d.reset(new ConvW(c));
+        d->ic = c.ic * c.kh * c.kw;  d->kh = d->kw = d->sh = d->sw = 1;  d->ph = d->pw = 0;
+        d->ssc.clear();
+        for (int i = 0; i < d->ic; ++i) d->ssc.push_back(c.ssc[i / (c.kh * c.kw)]);
+    }
+    return d.get();
+}
+
 Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre) {
     Y26_PROF("kernel conv (pack+PL+unpack)");
     const int H = xs[0].H(), W = xs[0].W();
-    struct Plane { const Src* s; int k; };         // channel k of source s; s == nullptr: arrived as codes (HW-B)
+    struct Plane { const Src* s; int k; };         // channel k of source s; s == nullptr: arrived as codes (yq)
     std::vector<Plane> src;                        // one plane per input channel: the concat, never built
     std::vector<std::pair<int, const Tensor*>> coded;   // (first channel, source) that arrived as codes
     bool pre_found = false;
@@ -677,7 +666,8 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     const int YS = Y26_HOST_YS(OW);
     const size_t HW = (size_t)H * W, nx = (size_t)c.ic * HW, ny = (size_t)c.oc * OH * YS * 4;
 
-    const WSlot& ws = weights_slot(B, c);
+    const ConvW* i2c = !pre && coded.empty() && xs.size() == 1 && sibling_pair(c.name) < 0 ? im2col_conv(c) : nullptr;
+    const WSlot& ws = weights_slot(B, i2c ? *i2c : c);
     const auto t1 = clk::now();
 
     // Y straight into the output tensor when it lives in the buffer with unpadded rows; else a scratch Y.
@@ -690,13 +680,13 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     const int pair = !pre && xs.size() == 1 && xs[0].op == Src::PLAIN && coded.empty() ? sibling_pair(c.name) : -1;
     if (pair >= 0) {
         std::lock_guard<std::mutex> g(g_sxm);
-        const auto it = g_sx.find(pair);
+        const auto it = g_sx.find({pair, xs[0].a->d.data()});
         if (it == g_sx.end()) {
             sx = std::make_shared<SharedX>();
             sx->c = &c;  sx->d = xs[0].a->d.data();
             sx->xr = std::make_shared<Region>(al(nx), c.name);
             sx->ready = sx->pr.get_future().share();
-            g_sx[pair] = sx;
+            g_sx[{pair, xs[0].a->d.data()}] = sx;
         } else {
             reuse = it->second->d == xs[0].a->d.data() && same_quant(*it->second->c, c);
             if (reuse) sx = it->second;
@@ -709,7 +699,11 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         void ok() { s->pr.set_value(); set = true; }
         ~Ready() { if (s && !set) s->pr.set_exception(std::make_exception_ptr(std::runtime_error("sibling X pack failed"))); }
     } ready{sx && !reuse ? sx.get() : nullptr};
-    Region xr(pre || sx ? 0 : al(nx), c.name), yr(direct ? 0 : ny, c.name);
+    const ConvW& kc = i2c ? *i2c : c;              // what the kernel runs
+    const int KH = i2c ? OH : H, KW = i2c ? OW : W;
+    const size_t nxk = i2c ? (size_t)kc.ic * OH * OW : nx;
+    std::vector<uint8_t> q3(i2c ? nx : 0);         // Img2Col: the ic code planes, gathered into X below
+    Region xr(pre || sx ? 0 : al(nxk), c.name), yr(direct ? 0 : ny, c.name);
     Layout L;
     L.x = pre ? pre->xr->off : sx ? sx->xr->off : xr.off;
     L.wt = ws.wt;  L.wsc = ws.wsc;  L.bias = ws.bias;  L.stp = ws.stp;  L.lo = ws.lo;
@@ -719,7 +713,8 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     const ConvW* cons = yq_edge(c, qoff);
     L.yq = cons ? 1 : 0;  L.qs = ws.qs;  L.qlo = ws.qlo;  L.qst = ws.qst;
 
-    uint8_t* X = B.host + L.x;                     // tb: pX (uint8 codes); Y26_XPE-packing is LE bytes
+    uint8_t* const XK = B.host + L.x;              // tb: pX (uint8 codes); Y26_XPE-packing is LE bytes
+    uint8_t* X = i2c ? q3.data() : XK;             // the ic planes as packed; == XK unless Img2Col
     // uint8 frame input: X[ic] = table_ic[k], the table being quant_plane of the very floats the loader made (k/255.f).
     std::shared_ptr<const std::vector<uint8_t>> u8;
     if (xs.size() == 1 && xs[0].op == Src::PLAIN && src[0].s) {
@@ -731,8 +726,8 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     size_t work = nx;
     for (const Src& t : xs) if (t.op == Src::POOL) work += (size_t)t.C() * HW * 2 * t.k;
     const size_t mt = reuse ? SIZE_MAX : pack_mt();
-    // Y26_PACK_SCHED=dynamic: static splits ic evenly, so a thread sharing its core with another async branch
-    // holds the whole region; dynamic hands out 4 planes at a time around it. Board: sweep with Y26_PACK_MT.
+    // Y26_PACK_SCHED=dynamic: hands out 4 planes at a time instead of an even static split (helps when a thread
+    // shares its core with another async branch).
     static const bool pack_dyn = [] { const char* e = std::getenv("Y26_PACK_SCHED"); return e && std::strcmp(e, "dynamic") == 0; }();
     auto pack_ic = [&](int ic) {
         const Src* sp = src[ic].s;
@@ -785,15 +780,33 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
             ch0 += t.C();
         }
     }
-    for (const auto& e : coded)                    // HW lever B: already this conv's codes, channel-major
+    for (const auto& e : coded)                    // already this conv's codes (yq), channel-major
         std::memcpy(X + (size_t)e.first * HW, e.second->d.data(), (size_t)e.second->C * HW);
-    if (!reuse) std::memset(X + nx, 0, al(nx) - nx);   // only the port-word tail needs zeros
+    if (i2c) {                                     // XK[(ic*kh+ky)*kw+kx][oy][ox] = X[ic][oy*sh+ky-ph][ox*sw+kx-pw], else 0
+        Y26_PROF("im2col gather");
+        for (int ic = 0; ic < c.ic; ++ic)
+            for (int ky = 0; ky < c.kh; ++ky)
+                for (int kx = 0; kx < c.kw; ++kx) {
+                    uint8_t* d = XK + (size_t)((ic * c.kh + ky) * c.kw + kx) * OH * OW;
+                    const uint8_t* sp = X + (size_t)ic * HW;
+                    for (int oy = 0; oy < OH; ++oy, d += OW) {
+                        const int iy = oy * c.sh + ky - c.ph;
+                        if (iy < 0 || iy >= H) { std::memset(d, 0, OW); continue; }
+                        const uint8_t* r = sp + (size_t)iy * W;
+                        for (int ox = 0; ox < OW; ++ox) {
+                            const int ix = ox * c.sw + kx - c.pw;
+                            d[ox] = ix >= 0 && ix < W ? r[ix] : 0;
+                        }
+                    }
+                }
+    }
+    if (!reuse) std::memset(XK + nxk, 0, al(nxk) - nxk);   // only the port-word tail needs zeros
     const auto t2 = clk::now();
     // Cached buffer: X (and the weights, at first use) are cleaned before the kernel reads them; Y's range is
     // cleaned before the kernel writes it, so no dirty line can later be evicted over Y. A reused sibling X was
     // cleaned by its packer.
     if (!B.coh) {                                  // coherent X/Y: the CCI snoops, nothing to maintain
-        if (!reuse) B.to_dev(L.x, al(nx));
+        if (!reuse) B.to_dev(L.x, al(nxk));
         B.for_write(L.y, ny);
     }
     if (sx && !reuse) ready.ok();
@@ -808,7 +821,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         std::memcpy(ref.data(), B.host, B.size);
     }
 #endif
-    const double kern = B.run(L, c, H, W);
+    const double kern = B.run(L, kc, KH, KW);
     const auto t4 = clk::now();
     if (!B.coh) B.from_dev(L.y, ny);
     const auto t4b = clk::now();
@@ -817,7 +830,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
 #ifndef Y26_BOARD_SIM
     if (!ref.empty()) {
         uint8_t* rb = reinterpret_cast<uint8_t*>(ref.data());
-        run_cmodel(rb, L, c, H, W);
+        run_cmodel(rb, L, kc, KH, KW);
         const float* g = reinterpret_cast<const float*>(rb + L.y);
         check = 0;
         for (int o = 0; o < c.oc; ++o)
@@ -843,7 +856,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         for (int r = 0; r < OH; ++r)
             std::memcpy(&y.d[((size_t)o * OH + r) * OW], Yf + ((size_t)o * OH + r) * YS, (size_t)OW * 4);
     const auto t6 = clk::now();
-    // out = invalidate/copy-back + unpack. The CHECK C-model (t4b->t5) is only in the conv total - don't time CHECK runs.
+    // out = invalidate/copy-back + unpack. Do not time CHECK runs (the C-model is inside the conv total).
     std::lock_guard<std::mutex> g(g_stats.m);
     if (g_stats.rows.empty() || t0 < g_stats.first) g_stats.first = t0;
     if (g_stats.rows.empty() || t6 > g_stats.last) g_stats.last = t6;

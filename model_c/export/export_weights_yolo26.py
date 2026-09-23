@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
-"""Export pruned50 YOLO26s conv weights (BN folded) to per-conv float32 .bin files + a manifest.
+"""Export YOLO26s conv weights (BN folded) to per-conv float32 .bin files + a manifest.
 
-For every Conv2d in the trunk:
-  * wrapped in ultralytics `Conv` (has sibling .bn, .act): fold BN into the conv ->
-        scale[o] = gamma[o]/sqrt(var[o]+eps),  bias[o] = beta[o] - mean[o]*scale[o]
-    write <name>.w.bin (OC*IC*KH*KW float32, PyTorch layout), <name>.s.bin, <name>.b.bin.
-    Fused output (pre-activation) = conv(x)*scale + bias.
-  * bare Conv2d (the Detect head's final 1x1, has its own bias, no BN): write <name>.w.bin +
-    <name>.b.bin, scale implicitly 1.
-The manifest.json records, per conv: name, in/out/k/s/p/g, has_bn, act in {silu,identity}. It is the
-single source of truth shared by the PyTorch dumper and the C++ loader -- act flags are read from the
-live module (`.act` type), never hard-coded.
+Conv with BN: scale[o] = gamma[o]/sqrt(var[o]+eps), bias[o] = beta[o] - mean[o]*scale[o];
+writes <name>.w.bin (OC*IC*KH*KW, PyTorch layout), .s.bin, .b.bin; output = conv(x)*scale + bias.
+Bare Conv2d (Detect's final 1x1): .w.bin + .b.bin, scale 1.
+Activation flags are read from the module, not hard-coded.
 
-fuse_conv_bn is the exact formula htdet used (fpga_support/export_weights.py).
-
-  conda run -n ueaod python hls/export/export_weights_yolo26.py
+  python model_c/export/export_weights_yolo26.py
 """
 import json
 import os
@@ -27,15 +19,13 @@ from ultralytics.nn.modules.conv import Conv
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEIGHTS = os.path.join(HERE, "..", "weights")
 CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
-EPS = 1e-3  # ultralytics BatchNorm2d default eps is 1e-3 (NOT torch's 1e-5)
-
+EPS = 1e-3  # ultralytics BatchNorm2d eps (not torch's 1e-5)
 
 def fuse_conv_bn(conv_w, gamma, beta, mean, var, eps):
     std = torch.sqrt(var + eps)
     scale = gamma / std
     bias = beta - mean * scale
     return scale.numpy().astype("<f4"), bias.numpy().astype("<f4")
-
 
 def save_bin(path, arr):
     arr = np.asarray(arr, dtype="<f4")
@@ -44,14 +34,12 @@ def save_bin(path, arr):
     assert np.array_equal(arr.flatten(), back), f"round-trip failed {path}"
     return arr.nbytes
 
-
 def act_name(act):
     if isinstance(act, nn.SiLU):
         return "silu"
     if isinstance(act, nn.Identity) or act is None:
         return "identity"
     raise ValueError(f"unexpected activation {type(act)}")
-
 
 def main():
     os.makedirs(WEIGHTS, exist_ok=True)
@@ -114,7 +102,6 @@ def main():
     # spot check one
     k0 = next(iter(manifest["convs"]))
     print(f"[export] e.g. {k0}: {manifest['convs'][k0]}")
-
 
 if __name__ == "__main__":
     main()

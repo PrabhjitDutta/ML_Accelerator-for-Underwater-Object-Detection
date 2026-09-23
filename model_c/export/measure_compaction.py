@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""Realized params/MACs/BRAM/DSP of the channel-compacted YOLO26s trunk (Phase 4).
+"""Params/MACs/BRAM/DSP of the channel-compacted trunk, per conv and in total, on XCZU9EG.
+Output sizes come from a real 640x640 forward; kept channels from compaction_map.json.
 
-Mask pruning zeroes whole output filters but keeps tensor shapes dense, so it buys nothing in
-hardware. `compact_yolo26.py` physically deletes the dead channels; this script measures what that
-actually bought, per conv and in total, and translates it to ZCU102 (XCZU9EG) resources.
-
-Output spatial sizes come from a real 640x640 forward (hooks on every Conv2d) -- the same method
-`training/yolo26s/measure_prune_macs.py` uses -- and the kept channel counts come from
-`hls/weights_compact/compaction_map.json`.
-
-  conda run -n ueaod python hls/export/measure_compaction.py [map_json]
+  python model_c/export/measure_compaction.py [map_json]
 """
 import json
 import os
@@ -27,7 +20,6 @@ MAP = os.path.join(HERE, "..", "weights_compact", "compaction_map.json")
 BRAM36_KBIT = 36          # one BRAM36 tile = 36 Kbit
 N_BRAM36 = 912
 N_DSP48 = 2520
-
 
 def spatial():
     """name -> (Hout, Wout, kh, kw, groups) for every Conv2d, from a real forward."""
@@ -48,7 +40,6 @@ def spatial():
     for h in hooks:
         h.remove()
     return out
-
 
 def main():
     mpath = sys.argv[1] if len(sys.argv) > 1 else MAP
@@ -95,7 +86,7 @@ def main():
     print(f"params : {dP/1e6:8.3f} M -> {cP/1e6:8.3f} M   ({100*(1-cP/dP):.1f}% smaller)")
     print(f"MACs   : {dM/1e9:8.3f} G -> {cM/1e9:8.3f} G   ({100*(1-cM/dM):.1f}% fewer)")
     print()
-    # --- ZCU102 resource translation -------------------------------------------------------
+    # ZCU102 resources
     for bits, tag in ((8, "INT8 (SmoothQuant deploy)"), (32, "FP32")):
         dk = dP * bits / 1024.0
         ck = cP * bits / 1024.0
@@ -103,14 +94,12 @@ def main():
               f"BRAM36 {dk/BRAM36_KBIT:7.1f} -> {ck/BRAM36_KBIT:7.1f} "
               f"of {N_BRAM36} ({100*ck/BRAM36_KBIT/N_BRAM36:.1f}% of device)")
     print()
-    # DSP: a compacted layer needs proportionally fewer MACs for the same latency target, i.e. the
-    # same DSP budget buys 1/(1-cut) more throughput. Report the II-equivalent both ways.
+    # DSP: the same DSP budget buys 1/(1-cut) more throughput on a compacted layer.
     print(f"DSP (XCZU9EG has {N_DSP48} DSP48E2):")
     for dsp in (256, 512, 1024):
         print(f"  {dsp:5d} DSPs @250MHz -> dense {dM/(dsp*250e6)*1e3:7.1f} ms/frame, "
               f"compact {cM/(dsp*250e6)*1e3:7.1f} ms/frame "
               f"({dM/cM:.2f}x speedup, {1e3/(cM/(dsp*250e6)*1e3):.1f} FPS)")
-
 
 if __name__ == "__main__":
     main()

@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Localize where the C-sim/oracle diverges from the deployed OpenVINO model, per layer.
+"""Find where the C++ model/oracle diverges from the OpenVINO model, per layer.
 
-Node names in the IR do NOT line up with our dump names by construction: our dumps are *module*
-outputs (a C3k2's output includes its cv2; SPPF's includes the shortcut add), while IR nodes are
-individual ops. Guessing the mapping is how you end up "measuring" layer 9 at cosine 0.29 and
-concluding the model is broken when you actually just probed the wrong tensor.
+IR nodes are single ops while the dumps are module outputs, so the mapping is found empirically: for
+each dump, the same-shape OV tensor with the highest cosine. Dumps with no same-shape candidate are
+reported.
 
-So this matches empirically: expose every plausible activation node, then for each of our dumps pick
-the OV tensor of the same shape with the highest cosine. That both establishes the mapping and gives
-the divergence. A layer whose BEST match is still poor is a genuine divergence; a layer with no
-same-shape candidate is reported as such rather than silently skipped.
-
-  conda run -n ueaod python hls/export/ov_layer_probe.py [dumps_dir] [suffix]
+  python model_c/export/ov_layer_probe.py [dumps_dir] [suffix]
 """
 import os
 import sys
@@ -28,13 +22,11 @@ DUMPS = os.path.join(HERE, "..", "dumps")
 CAND = ("Add", "Multiply", "Swish", "Concat", "MaxPool", "Interpolate", "Convolution",
         "GroupConvolution", "MatMul", "SoftMax")
 
-
 def cos(a, b):
     a = a.ravel().astype(np.float64)
     b = b.ravel().astype(np.float64)
     n = np.linalg.norm(a) * np.linalg.norm(b)
     return float(a @ b / n) if n else float("nan")
-
 
 def main():
     ddir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "dumps_sq")
@@ -80,7 +72,6 @@ def main():
         best, bc = max(((k, cos(a, v)) for k, v in cands), key=lambda t: t[1])
         shp = ovt[best].shape
         print(f"{nm:14s} {str(tuple(shp[1:])):>18s} {bc:12.6f}  {best}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""INT8 quantization degradation report: PyTorch fake-quant oracle vs the FP32 reference.
+"""INT8 quantization error report: PyTorch fake-quant oracle (dumps_int8) vs the FP32 reference (dumps),
+per layer. Not the C++ model gate (that is compare_cosine.py).
 
-This is NOT the C-sim arithmetic gate (that is compare_cosine.py ../dumps_int8, which checks the
-C-sim against the oracle at cosine ~1.0). This instead measures the *effect of quantization itself*
-by comparing the INT8 fake-quant oracle (dumps_int8/<name>_python.bin) against the FP32 reference
-(dumps/<name>_python.bin), per layer. Cosine < 1.0 here is expected and informative -- it shows how
-much and where W8A8 error accumulates through the trunk.
+  python model_c/export/compare_int8.py
 
-  conda run -n ueaod python hls/export/compare_int8.py
-
-This is a report, not a gate, but the same rule applies: a missing dump exits non-zero rather than
-printing a "worst cosine = 1.000000" that was computed over nothing. Pass --allow-missing to
-downgrade absent tensors to counted skips; even then, zero comparisons fails.
+A missing dump is an error; --allow-missing counts it as a skip. Zero comparisons always fails.
 """
 import os
 import sys
@@ -26,7 +19,6 @@ LAYERS = [str(i) for i in range(23)]
 SUBS = ["l10_cv1", "l10_attn", "l10_psablock"]
 HEAD = [f"o2m_{i}" for i in range(3)] + [f"o2o_{i}" for i in range(3)]
 
-
 def stats(a, b):
     a = a.astype(np.float64).ravel()
     b = b.astype(np.float64).ravel()
@@ -36,7 +28,6 @@ def stats(a, b):
     mae = float(np.max(np.abs(a - b))) if a.size else 0.0
     rl2 = float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-12))
     return cos, mae, rl2
-
 
 def main():
     allow_missing = "--allow-missing" in sys.argv[1:]
@@ -69,7 +60,7 @@ def main():
     print(f"worst layer/head cosine (INT8 vs FP32) = {worst_s}   "
           f"layers compared = {compared}/{ngated}")
 
-    # Never report a "worst cosine" that was computed over nothing -- see compare_cosine.py.
+    # Zero comparisons never passes.
     if compared == 0:
         print(f"ERROR: NO LAYERS WERE COMPARED -- this report is empty, not clean.\n"
               f"  FP32 oracle: {os.path.abspath(FP32)}\n"
@@ -85,7 +76,6 @@ def main():
     if missing:
         print(f"SKIPPED (--allow-missing): {[n for n, _ in missing]}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

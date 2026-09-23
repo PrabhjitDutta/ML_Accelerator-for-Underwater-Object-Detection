@@ -1,8 +1,4 @@
-// weights_loader.h - manifest-driven loader for the per-conv float32 .bin files.
-//
-// Reads weights/manifest.txt (one line per conv: name oc ic kh kw sh sw ph pw groups has_bn act)
-// and the matching <name>.w.bin (+ .s.bin if BN-folded) + <name>.b.bin. Every conv is addressable
-// by its PyTorch module name (e.g. "10.m.0.attn.qkv.conv"), so the trunk graph reads like the model.
+// Manifest-driven loader for the per-conv .bin weight files; each conv is looked up by its PyTorch module name.
 #pragma once
 #include <cmath>
 #include <string>
@@ -27,11 +23,8 @@ struct ConvW {
     bool asym = false;       // SmoothQuant: asymmetric uint8 activations + per-input-channel smooth
     float lo = 0.f;          // SmoothQuant: per-tensor activation FakeQuantize in_low (zero-point)
     std::vector<float> ssc;  // SmoothQuant: IC per-input-channel smooth pre-scale
-    // The 6 one2one_cv3 head depthwise convs carry a PER-INPUT-CHANNEL activation range instead of a
-    // per-tensor one. That is only expressible because they are depthwise: output o reads input o, so
-    // one step/lo governs the whole accumulation for o. A non-depthwise conv would need a different
-    // step per accumulated input channel, which a single int32 accumulator cannot represent -- hence
-    // the loader asserts depthwise here rather than trusting the flag.
+    // The 6 one2one_cv3 head depthwise convs have a per-input-channel activation range. Valid only for depthwise
+    // (output o reads only input o), so the loader asserts it.
     bool perch = false;
     std::vector<float> sa_v; // IC per-input-channel step (perch only)
     std::vector<float> lo_v; // IC per-input-channel in_low (perch only)
@@ -49,11 +42,7 @@ inline std::vector<float> read_bin(const std::string& path) {
     return v;
 }
 
-// Same, but fails loudly when the file length disagrees with what the manifest implies. Without this
-// a truncated or stale .bin is read at whatever length it happens to be, and conv2d then indexes past
-// the end of the vector -- which produces silently wrong output and still exits 0. Since the export
-// pipeline regenerates several weight dirs (dense / compact / fold, FP32 / INT8 / SmoothQuant), a
-// manifest-vs-binary desync is a realistic failure and must not be silent.
+// Same, but fails when the file length disagrees with the manifest instead of reading out of bounds later.
 inline std::vector<float> read_bin_n(const std::string& path, size_t n, const std::string& what) {
     std::vector<float> v = read_bin(path);
     if (v.size() != n)
@@ -74,10 +63,8 @@ struct FQ {
         q = q < 0.f ? 0.f : (q > 255.f ? 255.f : q);
         return q * step + lo;
     }
-    // d[i*stride] = (*this)(s[i*stride] * pre) for i < n, bit for bit, with no divide in the common case: the
-    // quant_plane argument (layer_ops.h) - (x-lo)*(1/step) rounds like (x-lo)/step unless a .5 tie lies between
-    // them, and then it is within 2^-12 of one; such a 64-block is redone with the divide. d may alias s.
-    // board_host/test_quantizer.cpp checks it against operator().
+    // d[i*stride] = (*this)(s[i*stride] * pre) for i < n, bit-exact and divide-free except for blocks near a .5 tie
+    // (as quant_plane in layer_ops.h). d may alias s. Checked by board_host/test_quantizer.cpp.
     void apply(float* d, const float* s, size_t n, size_t stride = 1, float pre = 1.f) const {
         const float inv = 1.f / step;
         size_t j = 0;
@@ -98,8 +85,7 @@ struct FQ {
     }
 };
 
-// The five quantizers OV places INSIDE each Attention block (see ingest_smoothquant.py ATTN_FQ).
-// v is quantized twice, with separately calibrated ranges, for its two consumers.
+// The five quantizers OpenVINO places inside each Attention block. v has two, one per consumer.
 struct AttnFQ {
     FQ q, k, sm, v_mm, v_pe;
     bool on = false;
@@ -113,9 +99,7 @@ struct Weights {
     bool int8 = false;
     bool sq = false;
     bool compact = false;
-    // Channel-compacted weights: a C3k2/C2PSA cv1 output no longer splits at C/2, because the two
-    // halves lose different numbers of dead channels. splits.txt (written by compact_yolo26.py)
-    // gives the compacted split index per block; absent -> dense, split at C/2.
+    // Channel-compacted cv1 outputs no longer split at C/2: splits.txt gives the split per block (absent -> C/2).
     std::unordered_map<int, int> splits;
 
     // Split index for block `i` given the (compacted) cv1 output width C.
@@ -132,9 +116,9 @@ struct Weights {
             int i, c;
             while (sf >> i >> c) splits[i] = c;
         }
-        // Mode is auto-detected from the weights dir by which manifest is present:
-        //   manifest_sq.txt   -> SmoothQuant (per-conv qmode; asymmetric uint8 + per-IC smooth scale)
-        //   manifest_int8.txt -> Phase-2 symmetric INT8 (per-tensor `sa`, weights BN-folded+quantized)
+        // Mode by which manifest is present:
+        //   manifest_sq.txt   -> SmoothQuant (asymmetric uint8 + per-IC smooth scale, per-conv qmode)
+        //   manifest_int8.txt -> symmetric INT8 (per-tensor sa)
         //   manifest.txt      -> FP32
         std::ifstream sqf(dir + "/manifest_sq.txt");
         sq = (bool)sqf;
@@ -156,7 +140,7 @@ struct Weights {
             if (sq) {
                 ss >> c.sa >> c.lo;               // both columns always present (0 when qmode==0)
                 int perch = 0;
-                ss >> perch;                      // trailing column; absent in pre-Phase-5 manifests
+                ss >> perch;                      // optional trailing column
                 c.perch = (perch == 1);
                 if (flag == 1) { c.quant = true; c.asym = true; }
                 else           { c.has_bn = false; }   // FP32-folded (pe + one2many head): scale 1
@@ -184,8 +168,7 @@ struct Weights {
             c.name = name;
             conv.emplace(name, std::move(c));
         }
-        // attn_fq.txt: "<block> qlo qhi klo khi smlo smhi vmmlo vmmhi vpelo vpehi". Absent -> the
-        // attention interiors stay FP32 (Phase 3 behaviour), so older weight dirs still load.
+        // attn_fq.txt: "<block> qlo qhi klo khi smlo smhi vmmlo vmmhi vpelo vpehi". Absent -> FP32 attention interior.
         std::ifstream af(dir + "/attn_fq.txt");
         std::string blk;
         float v[10];

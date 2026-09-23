@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""End-to-end sanity: feed the C-sim's 6 head maps through the host-side Yolo26Trunk.decode()
-(anchors/dist2bbox/top-k, reused unchanged) and compare final detections to the PyTorch pipeline
-on the same image. cosine=1.0 on the head maps should make these detections identical.
+"""Decode the C++ model's head maps with Yolo26Trunk.decode() and compare the detections to the PyTorch
+pipeline on the same image.
 
-  conda run -n ueaod python hls/export/decode_check.py
+  python model_c/export/decode_check.py [dumps_dir] [csim|python]
 """
 import os
 import sys
@@ -12,8 +11,7 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.path.join(HERE, "..", "dumps")           # input.bin always lives here
-# C-sim head maps to decode; pass ../dumps_int8 as argv[1] to check the INT8 run vs FP32 PyTorch.
-# argv[2] picks the file suffix: "csim" (default, the C-sim output) or "python" (the PyTorch oracle).
+# argv[1]: head-map dumps dir; argv[2]: file suffix, csim (default) or python.
 CSIM = sys.argv[1] if len(sys.argv) > 1 else INPUT_DIR
 SUFFIX = sys.argv[2] if len(sys.argv) > 2 else "csim"
 sys.path.insert(0, "/workspace/ckarfa/projects/UOD/training/yolo26s")
@@ -22,7 +20,6 @@ from ultralytics import YOLO  # noqa: E402
 
 CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
 SHAPES = [(8, 80, 80), (8, 40, 40), (8, 20, 20)]
-
 
 def main():
     m = YOLO(CKPT)
@@ -53,7 +50,6 @@ def main():
     for i in range(n):
         b = py[i]
         print(f"  cls{int(b[5])} conf={b[4]:.3f} box=[{b[0]:.1f},{b[1]:.1f},{b[2]:.1f},{b[3]:.1f}]")
-
 
 if __name__ == "__main__":
     main()

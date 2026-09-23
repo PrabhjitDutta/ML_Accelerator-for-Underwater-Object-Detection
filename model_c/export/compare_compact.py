@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""Lossless gate for Phase 4: the channel-compacted C-sim vs the dense C-sim.
+"""Lossless check: channel-compacted C++ model dumps vs the dense ones, which must match exactly.
 
-Compaction only drops channels that are identically zero, so the compacted graph must reproduce the
-dense one EXACTLY -- not approximately. Intermediate layer dumps have fewer channels now, so each is
-scattered back into its dense channel slots (compaction_map.json["dumps"]) and the dropped slots are
-asserted to be zero in the dense reference. The head maps (o2m_*/o2o_*) are full width and compare
-directly; those are the ones that actually feed decode.
+Compacted layer dumps are scattered back to their dense channel slots (compaction_map.json["dumps"])
+and the dropped slots must be zero in the dense reference. Head maps are full width and compare directly.
 
-  conda run -n ueaod python hls/export/compare_compact.py [dense_dumps] [compact_dumps] [map.json]
+  python model_c/export/compare_compact.py [dense_dumps] [compact_dumps] [map.json]
 
-A tensor missing from either side is a HARD ERROR, not a silent skip -- a run that compared nothing
-must never print PASS. Pass --allow-missing to downgrade absent tensors to counted skips (the
--DYOLO26_NO_O2M deploy build legitimately emits no o2m_* dumps); even then, zero comparisons fails.
+A missing tensor is an error; --allow-missing counts it as a skip (the -DYOLO26_NO_O2M build has no
+o2m_* dumps). Zero comparisons always fails.
 """
 import json
 import os
@@ -21,11 +17,9 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-
 def load(d, name):
     p = os.path.join(d, f"{name}_csim.bin")
     return np.fromfile(p, dtype="<f4") if os.path.exists(p) else None
-
 
 def main():
     argv = [a for a in sys.argv[1:] if a != "--allow-missing"]
@@ -78,7 +72,7 @@ def main():
     print()
     print(f"[compact-gate] tensors compared = {compared}/{len(names)}")
 
-    # A gate that compared nothing must never pass, in any mode -- not even with --allow-missing.
+    # Zero comparisons never passes, even with --allow-missing.
     if compared == 0:
         print(f"[compact-gate] ERROR - NO TENSORS WERE COMPARED, nothing was verified. NOT A PASS.\n"
               f"  dense:   {os.path.abspath(dense)}\n"
@@ -101,7 +95,6 @@ def main():
     else:
         print(f"[compact-gate] FAIL - {bad} tensor(s) differ (missed add-union or concat-offset bug).")
     return 1 if bad else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Dump per-layer PyTorch activations of the pruned50 YOLO26s trunk for cosine validation.
+"""Dump per-layer PyTorch activations of the YOLO26s trunk for comparison with the C++ model.
 
-Loads pruned50 via YOLO(), wraps it in the existing Yolo26Trunk (training/yolo26s/yolo26_trunk.py),
-feeds the shared hls/dumps/input.bin, and saves:
-  * each top-level layer output 0..22  -> dumps/<i>_python.bin        ([C,H,W] float32)
-  * the 6 raw head maps                -> dumps/o2m_{0..2}_python.bin, o2o_{0..2}_python.bin
-  * a few layer-10 attention sub-outputs (cv1/attn/psablock/cv2) to localize attention bugs.
-Every file is float32, batch dim squeezed, C-order [C,H,W] -- byte-identical layout to the C-sim dumps.
+Reads dumps/input.bin and writes float32 [C,H,W] files (same layout as the C++ dumps):
+  layers 0..22 -> <i>_python.bin; head maps -> o2m_{0..2}_python.bin, o2o_{0..2}_python.bin;
+  plus layer-10 attention sub-outputs.
 
-  conda run -n ueaod python hls/export/dump_yolo26_features.py
+  python model_c/export/dump_yolo26_features.py
 """
 import os
 import sys
@@ -23,7 +20,6 @@ from ultralytics import YOLO  # noqa: E402
 
 CKPT = "/workspace/ckarfa/projects/UOD/final_models/pruned50/yolo26s_urpc2018_pruned50_fp32.pt"
 
-
 def save(name, t):
     arr = t.detach().float().cpu().numpy()
     if arr.ndim == 4:
@@ -31,7 +27,6 @@ def save(name, t):
     arr = np.ascontiguousarray(arr, dtype="<f4")
     arr.tofile(os.path.join(DUMPS, f"{name}_python.bin"))
     return arr.shape
-
 
 def main():
     x = np.fromfile(os.path.join(DUMPS, "input.bin"), dtype="<f4")
@@ -52,7 +47,7 @@ def main():
     # top-level layers 0..22 (Detect is index 23, handled via forward return)
     for i in range(23):
         hooks.append(trunk.model[i].register_forward_hook(mk(str(i))))
-    # layer-10 attention internals (the main risk area)
+    # layer-10 attention internals
     l10 = trunk.model[10]
     hooks.append(l10.cv1.register_forward_hook(mk("l10_cv1")))
     hooks.append(l10.m[0].attn.register_forward_hook(mk("l10_attn")))
@@ -71,7 +66,6 @@ def main():
     for h in hooks:
         h.remove()
     print(f"[dump] wrote python features -> {DUMPS}")
-
 
 if __name__ == "__main__":
     main()

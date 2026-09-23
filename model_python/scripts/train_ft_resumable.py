@@ -1,21 +1,14 @@
                       
-"""Idempotent, resumable fine-tune of COCO-pretrained YOLO26s on URPC2018.
+"""Resumable fine-tune of COCO-pretrained YOLO26s on URPC2018; safe to call repeatedly from a retry loop.
 
-Safe to invoke repeatedly (that's the whole point — a crash-retry loop calls this
-until it exits 0). Decides what to do from the on-disk state of the run dir:
+  1. RUN/DONE exists    -> exit 0.
+  2. last.pt resumable  -> YOLO(last).train(resume=True)
+     (resumable == ckpt['epoch'] != -1 and ckpt['optimizer'] is not None).
+  3. last.pt stripped   -> ultralytics finalized it: touch DONE, exit 0 (resume on a stripped ckpt
+                           silently starts a fresh run).
+  4. otherwise          -> fine-tune from yolo26s.pt.
 
-  1. RUN/DONE exists            -> already finished; exit 0 (no accidental retrain).
-  2. last.pt is *resumable*     -> YOLO(last).train(resume=True)  (optimizer + LR intact).
-     (resumable == ckpt['epoch'] != -1 AND ckpt['optimizer'] is not None)
-  3. last.pt exists but stripped-> epoch==-1 / optimizer==None means ultralytics already
-     finalized it => run is complete; touch DONE, exit 0.
-     (This guards the gotcha we hit on YOLO26m: train(resume=True) on a stripped ckpt
-      silently falls back to a fresh coco8 run.)
-  4. otherwise (fresh)          -> YOLO('yolo26s.pt') COCO weights -> fine-tune.
-
-On normal completion it writes RUN/DONE and prints FINETUNE COMPLETE.
-
-  conda run -n ueaod python training/yolo26s/train_ft_resumable.py
+  python model_python/scripts/train_ft_resumable.py
 """
 from pathlib import Path
 
@@ -31,7 +24,6 @@ RUN = PROJECT / NAME
 LAST = RUN / "weights" / "last.pt"
 DONE = RUN / "DONE"
 
-
 def is_resumable(p: Path) -> bool:
     """True only if the checkpoint carries live training state (not a stripped ckpt)."""
     if not p.exists():
@@ -43,12 +35,10 @@ def is_resumable(p: Path) -> bool:
         return False
     return ck.get("epoch", -1) != -1 and ck.get("optimizer") is not None
 
-
 def mark_done():
     RUN.mkdir(parents=True, exist_ok=True)
     DONE.touch()
     print("FINETUNE COMPLETE")
-
 
 def main():
     if DONE.exists():
@@ -89,7 +79,6 @@ def main():
         plots=True,
     )
     mark_done()
-
 
 if __name__ == "__main__":
     main()

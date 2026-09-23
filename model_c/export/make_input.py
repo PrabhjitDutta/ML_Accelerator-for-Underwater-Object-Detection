@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Produce the single fixed input tensor consumed by BOTH the PyTorch dumper and the C-sim.
+"""Write the fixed input tensor read by both the PyTorch dumper and the C++ model.
 
-Letterbox one deterministic val2018 image to 3x640x640 (RGB, /255, CHW) exactly as ultralytics
-would for inference, and write the *actual float32 tensor* to hls/dumps/input.bin. Because both the
-PyTorch reference (dump_yolo26_features.py) and the C++ trunk read this identical buffer, there is zero
-preprocessing mismatch to confound the per-layer cosine check.
+Letterboxes one val2018 image to 3x640x640 (RGB, /255, CHW) as ultralytics does and writes the float32
+tensor to dumps/input.bin.
 
-  conda run -n ueaod python hls/export/make_input.py
+  python model_c/export/make_input.py
 """
 import os
 import sys
@@ -18,7 +16,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DUMPS = os.path.join(HERE, "..", "dumps")
 IMG = "/workspace/ckarfa/projects/UOD/dataset/urpc 2018/val2018/images/CHN083846_0270.jpg"
 SIZE = 640
-
 
 def main():
     global IMG
@@ -39,7 +36,6 @@ def main():
     print(f"[make_input] wrote {out}  shape={x.shape}  "
           f"min={x.min():.4f} max={x.max():.4f} mean={x.mean():.4f}")
     print(f"[make_input] first5={x.flatten()[:5].tolist()}")
-
 
 if __name__ == "__main__":
     main()
