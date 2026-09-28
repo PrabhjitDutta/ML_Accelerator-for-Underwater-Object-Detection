@@ -104,3 +104,7 @@ cb2103cf72ba2568687bff73f81980272d620334d4726c23786e97ab9c1d4c04  3_place_and_ro
 d9dec4881a3401e1c59c001fa85ba42748a5faf1b5cd65cedb98f8271a04b717  3_place_and_route/methodology_drc_routed.rpt    (from C:\hls_y26\bringup\ya128_250\prj\bringup.runs\impl_2\bd_wrapper_methodology_drc_routed.rpt)
 bf9f7531e49882d3dc15723bd9faed788687f179303ff91466ee57959ce7c822  3_place_and_route/clock_utilization_routed.rpt    (from C:\hls_y26\bringup\ya128_250\prj\bringup.runs\impl_2\bd_wrapper_clock_utilization_routed.rpt)
 4869501c85626bd1dd85c9a43c1b75eb40f7b8b3955e845784542aa3a44f0f4e  3_place_and_route/routed_checkpoint/yolo26s_zcu102_routed.dcp    (from C:\hls_y26\bringup\ya128_250\prj\bringup.runs\impl_2\bd_wrapper_routed.dcp)
+ba0909ba7a8973f6c73cfb2383bdab95c1f5c0200c2f0b5f0fc74a6c65f894ee  4_bitstream/yolo26s_zcu102.bit.bin    (bootgen -process_bitstream bin of 4_bitstream/yolo26s_zcu102.bit)
+e3db04b1ff9515daed1ed99f1ce4ba5b5a6f526846bbf4f6003e94e278624b82  4_bitstream/yolo26s_zcu102.bif    (bootgen input)
+430b1c1072d043cf7d54e6cd6de7e6d5c2b3ab2cd9da2cba3072081ab42609ba  4_bitstream/yolo26s_zcu102.dtso    (sdtgen + lopper xlnx_overlay_dt from 4_bitstream/yolo26s_zcu102.xsa)
+a99435806d8b386d56b845df80ada0298d334292e782b9e9d8d509ef8cb8a8d7  4_bitstream/yolo26s_zcu102.dtbo    (dtc -@ of yolo26s_zcu102.dtso)
