@@ -15,6 +15,9 @@
 #endif
 #include "tensor_types.h"
 #include "weights_loader.h"
+#ifdef Y26_ATTN_INT
+#include "../hls_kernel/attention_int.h"
+#endif
 
 // SiLU in double, rounded to float: the closest portable match to torch's float32 SiLU.
 static inline float silu(float v) { double d = v; return (float)(d / (1.0 + std::exp(-d))); }
@@ -44,10 +47,26 @@ static inline uint8_t y26_yq_code(uint32_t slot, float s, float lo, float st) {
     return (uint8_t)(int)q_u8(v, s, lo, st);
 }
 
+// y26_yq_code over n slots. d may be the slots' own storage: byte i is written after slot i is read. A 64-block
+// with no escaped slot is a plain narrowing, which GCC vectorizes.
+__attribute__((optimize("tree-vectorize", "vect-cost-model=dynamic")))
+inline void y26_yq_plane(uint8_t* d, const uint32_t* s, size_t n, float qs, float lo, float st) {
+    uint32_t t[64];
+    uint8_t o[64];
+    for (size_t j = 0; j < n; j += 64) {
+        const size_t m = n - j < 64 ? n - j : 64;
+        std::memcpy(t, s + j, m * 4);
+        uint32_t any = 0;
+        for (size_t k = 0; k < m; ++k) { any |= t[k]; o[k] = (uint8_t)t[k]; }
+        if (any >> 8) for (size_t k = 0; k < m; ++k) o[k] = y26_yq_code(t[k], qs, lo, st);
+        std::memcpy(d + j, o, m);
+    }
+}
+
 // q_u8 over n values without a divide, bit-identical to q_u8: x*(1/step) rounds like x/step except near a .5
 // tie, and such a 64-block is redone with the divide. Written so GCC vectorizes it (NEON).
-// Checked by board_host/test_quantizer.cpp.
-__attribute__((optimize("vect-cost-model=dynamic")))
+// Checked by board_host/test_quantizer.cpp. "tree-vectorize": GCC 11 drops the command-line flag under optimize().
+__attribute__((optimize("tree-vectorize", "vect-cost-model=dynamic")))
 inline void quant_plane(uint8_t* __restrict xo, const float* __restrict xp, size_t n, float s, float lo, float st) {
     const float inv = 1.f / st;
     size_t j = 0;
@@ -95,6 +114,10 @@ using Pre = std::shared_ptr<Y26Pre>;
 Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre = nullptr);
 // t = c's FIRST (last = false) or LAST input source. t's storage must outlive the conv; t itself may be moved.
 Pre y26_board_prepack(const Tensor* t, const ConvW& c, bool last);
+#ifdef Y26_ATTN_INT
+// board_host.cpp: y26_attn_int_head for NH heads on the attention block. q, k: [NH][N][KD]; v, J: [NH][N][VD].
+void y26_board_attn(const int8_t* q, const int8_t* k, const int8_t* v, int32_t* J, int NH, int N, int KD, int VD, AttnInt c);
+#endif
 // The frame loop's input as uint8 k (float k/255.f): 0.conv packs it through a 256-entry table. u8 = null forgets d.
 void y26_input_u8(const float* d, std::shared_ptr<const std::vector<uint8_t>> u8);
 // Board-only PS profile: self time per op (nested timed scopes excluded), per thread.
@@ -339,6 +362,55 @@ inline Tensor slice_ch(const Tensor& x, int c0, int n) {
     return y;
 }
 
+typedef float y26_f4 __attribute__((vector_size(16), aligned(4), may_alias));   // 4 floats, any alignment
+
+// Attention scores of 8 queries: P[n2*8 + j] = sum over kd, ascending, of qb[kd*8 + j] * kt[n2*KD + kd].
+// Explicit vectors hold the sums in registers, two n2 per pass; every element keeps that sum order.
+inline void y26_attn_qk(float* P, const float* qb, const float* kt, int N, int KD) {
+    int n2 = 0;
+    for (; n2 + 2 <= N; n2 += 2) {
+        const float *k0 = kt + (size_t)n2 * KD, *k1 = k0 + KD;
+        y26_f4 a0 = {}, a1 = {}, b0 = {}, b1 = {};
+        for (int kd = 0; kd < KD; ++kd) {
+            const y26_f4 q0 = *(const y26_f4*)(qb + kd * 8), q1 = *(const y26_f4*)(qb + kd * 8 + 4);
+            a0 += q0 * k0[kd]; a1 += q1 * k0[kd];
+            b0 += q0 * k1[kd]; b1 += q1 * k1[kd];
+        }
+        y26_f4* p = (y26_f4*)(P + (size_t)n2 * 8);
+        p[0] = a0; p[1] = a1; p[2] = b0; p[3] = b1;
+    }
+    for (; n2 < N; ++n2)
+        for (int j = 0; j < 8; ++j) {
+            float a = 0.f;
+            for (int kd = 0; kd < KD; ++kd) a += qb[kd * 8 + j] * kt[(size_t)n2 * KD + kd];
+            P[(size_t)n2 * 8 + j] = a;
+        }
+}
+
+// Attention output of 8 queries: o[vd*8 + j] = sum over n2, ascending, of v[vd*N + n2] * P[n2*8 + j]. Four v rows per pass.
+inline void y26_attn_vp(float* o, const float* v, const float* P, int N, int VD) {
+    int vd = 0;
+    for (; vd + 4 <= VD; vd += 4) {
+        const float *v0 = v + (size_t)vd * N, *v1 = v0 + N, *v2 = v1 + N, *v3 = v2 + N;
+        y26_f4 a0 = {}, a1 = {}, b0 = {}, b1 = {}, c0 = {}, c1 = {}, d0 = {}, d1 = {};
+        for (int n2 = 0; n2 < N; ++n2) {
+            const y26_f4 p0 = *(const y26_f4*)(P + (size_t)n2 * 8), p1 = *(const y26_f4*)(P + (size_t)n2 * 8 + 4);
+            a0 += p0 * v0[n2]; a1 += p1 * v0[n2];
+            b0 += p0 * v1[n2]; b1 += p1 * v1[n2];
+            c0 += p0 * v2[n2]; c1 += p1 * v2[n2];
+            d0 += p0 * v3[n2]; d1 += p1 * v3[n2];
+        }
+        y26_f4* q = (y26_f4*)(o + (size_t)vd * 8);
+        q[0] = a0; q[1] = a1; q[2] = b0; q[3] = b1; q[4] = c0; q[5] = c1; q[6] = d0; q[7] = d1;
+    }
+    for (; vd < VD; ++vd)
+        for (int j = 0; j < 8; ++j) {
+            float a = 0.f;
+            for (int n2 = 0; n2 < N; ++n2) a += v[(size_t)vd * N + n2] * P[(size_t)n2 * 8 + j];
+            o[(size_t)vd * 8 + j] = a;
+        }
+}
+
 // C2PSA/PSABlock attention (ultralytics block.Attention), dim = x.C.
 //   num_heads = max(dim/64, 1); head_dim = dim/num_heads; key_dim = head_dim/2; scale = 1/sqrt(key_dim)
 //   attn = softmax((q*scale)^T @ k);  out = (v @ attn^T) + pe(v);  return proj(out)
@@ -357,6 +429,48 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
                      " but num_heads*per_head=" + std::to_string(num_heads * per_head));
 
     Tensor q = conv2d(x, qkv);                     // [nh*per_head, H, W]
+#ifdef Y26_ATTN_INT
+    // Integer form on the quantizers' codes (attention_int.h): q, k, v_mm must be zero-centred, sm must start at 0.
+    auto centred = [](const FQ& f) { return f.on && std::fabs(f.lo + 128.f * f.step) < 1e-3f * f.step; };
+    CSIM_HOST_ASSERT(centred(fq.q) && centred(fq.k) && centred(fq.v_mm) && fq.sm.on && fq.sm.lo == 0.f,
+                     "attention: the integer form needs zero-centred q/k/v quantizers and sm.lo = 0");
+    const AttnInt ai = {(uint32_t)std::llround(std::ldexp((double)fq.q.step * fq.k.step / std::log(2.0), 28)),
+                        (uint32_t)std::llround(65536.0 / fq.sm.step)};
+    // Signed codes (code - 128), laid out [head][n][d].
+    std::vector<int8_t> qc((size_t)num_heads * N * key_dim), kc(qc.size()), vc((size_t)C * N);
+    auto codes = [N](int8_t* d, int stride, const float* s, const FQ& f, float pre) {
+        std::vector<uint8_t> t(N);
+        quant_plane(t.data(), s, N, pre, f.lo, f.step);
+        for (int n = 0; n < N; ++n) d[(size_t)n * stride] = (int8_t)(t[n] ^ 0x80);
+    };
+    Tensor vt(C, H, W);                            // v for pe(), channel = head*head_dim + vd
+    CSIM_OMP_STATIC
+    for (int hv = 0; hv < C; ++hv) {
+        const int hh = hv / head_dim, vd = hv % head_dim;
+        const float* sv = &q.d[(size_t)(hh * per_head + 2 * key_dim + vd) * N];
+        fq.v_pe.apply(&vt.d[(size_t)hv * N], sv, N);
+        codes(&vc[(size_t)hh * N * head_dim + vd], head_dim, sv, fq.v_mm, 1.f);
+        if (vd < key_dim) {
+            codes(&qc[(size_t)hh * N * key_dim + vd], key_dim, &q.d[(size_t)(hh * per_head + vd) * N], fq.q, scale);
+            codes(&kc[(size_t)hh * N * key_dim + vd], key_dim, &q.d[(size_t)(hh * per_head + key_dim + vd) * N], fq.k, 1.f);
+        }
+    }
+    Tensor pe_out = conv2d(vt, pe);
+    std::vector<int32_t> J((size_t)C * N);
+#ifdef Y26_BOARD
+    y26_board_attn(qc.data(), kc.data(), vc.data(), J.data(), num_heads, N, key_dim, head_dim, ai);
+#else
+    CSIM_OMP_DYNAMIC
+    for (int hh = 0; hh < num_heads; ++hh)
+        y26_attn_int_head(&qc[(size_t)hh * N * key_dim], &kc[(size_t)hh * N * key_dim], &vc[(size_t)hh * N * head_dim],
+                          &J[(size_t)hh * N * head_dim], N, key_dim, head_dim, ai);
+#endif
+    const float osc = fq.sm.step * fq.v_mm.step;
+    Tensor out(C, H, W, NoInit());
+    for (int hv = 0; hv < C; ++hv)
+        for (int n = 0; n < N; ++n)
+            out.d[(size_t)hv * N + n] = (float)J[((size_t)(hv / head_dim) * N + n) * head_dim + hv % head_dim] * osc;
+#else
     // q is scaled BEFORE it is quantized (OpenVINO's FakeQuantize follows the scale Multiply).
     std::vector<float> qs((size_t)num_heads * key_dim * N), ks(qs.size()),
                        vm((size_t)num_heads * head_dim * N);
@@ -384,19 +498,17 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
         const float* qh = &qs[(size_t)(hh * key_dim) * N];
         const float* kh = &ks[(size_t)(hh * key_dim) * N];
         const float* vh = &vm[(size_t)(hh * head_dim) * N];
-        // QB queries at a time, P laid out [n2][QB]: unit-stride inner loops vectorize without reordering any sum.
-        constexpr int QB = 8;
-        std::vector<float> P((size_t)N * QB);
+        // QB queries at a time, P laid out [n2][QB]; kt is k as [n2][kd], qb the query block as [kd][QB].
+        constexpr int QB = 8;                              // y26_attn_qk / y26_attn_vp are written for 8
+        std::vector<float> P((size_t)N * QB), kt((size_t)N * key_dim), qb((size_t)key_dim * QB), o((size_t)head_dim * QB);
+        for (int kd = 0; kd < key_dim; ++kd)
+            for (int n2 = 0; n2 < N; ++n2) kt[(size_t)n2 * key_dim + kd] = kh[(size_t)kd * N + n2];
         for (int n0 = 0; n0 < N; n0 += QB) {
             const int nb = std::min(QB, N - n0);           // tail lanes compute on q=0, never stored
-            std::fill(P.begin(), P.end(), 0.f);
-            for (int kd = 0; kd < key_dim; ++kd) {
-                float qv[QB] = {};
-                for (int j = 0; j < nb; ++j) qv[j] = qh[(size_t)kd * N + n0 + j];
-                const float* kr = &kh[(size_t)kd * N];
-                for (int n2 = 0; n2 < N; ++n2)
-                    for (int j = 0; j < QB; ++j) P[(size_t)n2 * QB + j] += qv[j] * kr[n2];
-            }
+            for (int kd = 0; kd < key_dim; ++kd)
+                for (int j = 0; j < QB; ++j) qb[(size_t)kd * QB + j] = j < nb ? qh[(size_t)kd * N + n0 + j] : 0.f;
+            y26_attn_qk(P.data(), qb.data(), kt.data(), N, key_dim);
+            float inv8[QB] = {};                           // tail lanes stay 0
             for (int j = 0; j < nb; ++j) {
                 float mx = -1e30f;
                 for (int n2 = 0; n2 < N; ++n2) { const float s = P[(size_t)n2 * QB + j]; if (s > mx) mx = s; }
@@ -405,18 +517,15 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
                     const float e = std::exp(P[(size_t)n2 * QB + j] - mx);
                     P[(size_t)n2 * QB + j] = e; sum += e;
                 }
-                const float inv = 1.f / sum;
-                fq.sm.apply(&P[j], &P[j], N, QB, inv);   // quantized probs: fq.sm(P * inv), divide-free
+                inv8[j] = 1.f / sum;
             }
-            for (int vd = 0; vd < head_dim; ++vd) {
-                float acc[QB] = {};
-                const float* vr = &vh[(size_t)vd * N];
-                for (int n2 = 0; n2 < N; ++n2)
-                    for (int j = 0; j < QB; ++j) acc[j] += vr[n2] * P[(size_t)n2 * QB + j];
-                for (int j = 0; j < nb; ++j) out.d[(size_t)(hh * head_dim + vd) * N + n0 + j] = acc[j];
-            }
+            fq.sm.apply8(P.data(), N, inv8);               // quantized probs: fq.sm(P * inv), divide-free
+            y26_attn_vp(o.data(), vh, P.data(), N, head_dim);
+            for (int vd = 0; vd < head_dim; ++vd)
+                for (int j = 0; j < nb; ++j) out.d[(size_t)(hh * head_dim + vd) * N + n0 + j] = o[(size_t)vd * QB + j];
         }
     }
+#endif
     Tensor xattn = add(out, pe_out);
     return conv2d(xattn, proj);
 }

@@ -34,12 +34,14 @@ Each folder has its own `README.md` with the details.
 | | |
 |---|---|
 | FPGA clock | 250 MHz, timing met |
-| Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA part only. |
-| Chip resources used | 23% of logic (LUTs), 23% of block RAM, 29% of DSP blocks |
-| Correctness | The FPGA engine matches the C++ reference exactly on all 100 layers it runs. |
+| Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA's convolutions only (its attention block adds 4.7 ms). |
+| On the board, whole program | **205.9 ms per image, 4.86 images per second** (20 test images, one at a time). This includes the ARM processor's share of the work. |
+| Chip resources used | 31% of logic (LUTs), 27% of block RAM, 42% of DSP blocks |
+| Correctness | On the board, the FPGA matches the C++ reference exactly on all 100 convolution layers and on both attention layers. |
+| Accuracy | mAP50 0.754 on the 800 URPC2018 validation images, measured on the board. |
 
-**Status:** the bitstream is built, and the board program has been tested on a PC. Running it on the actual board
-is the next step.
+**Status:** the design runs on the ZCU102. The FPGA computes every convolution and the core of the two attention
+layers; the ARM processor does the rest.
 
 ## Quick start
 

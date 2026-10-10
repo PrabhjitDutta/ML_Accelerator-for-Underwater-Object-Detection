@@ -51,6 +51,17 @@ int main() {
             fbad += std::memcmp(&want, &y[j], 4) != 0;
         }
         ftot += n;
+        if (stride == 8) {                                   // apply8: every column, each with its own pre
+            float p8[8];
+            for (int k = 0; k < 8; ++k) p8[k] = k % 2 ? pre : pre * (0.5f + U(rng));   // odd columns keep the planted ties
+            y = x;
+            f.apply8(y.data(), n, p8);
+            for (size_t j = 0; j < n * 8; ++j) {
+                const float want = f(x[j] * p8[j & 7]);
+                fbad += std::memcmp(&want, &y[j], 4) != 0;
+            }
+            ftot += n * 8;
+        }
     }
     std::printf("test_quant: FQ::apply %ld values, %ld differ from FQ() -> %s\n", ftot, fbad, fbad ? "FAIL" : "PASS");
     return bad != 0 || fbad != 0;

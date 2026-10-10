@@ -29,6 +29,9 @@
 // ~249975000 Hz. The exit summary splits every conv into pack / in / kernel / out plus PS time between convs.
 #include "../hls_kernel/conv_engine.h"
 #include "../reference_model/layer_ops.h"
+#ifdef Y26_ATTN_INT
+#include "../hls_kernel/attention_engine.h"
+#endif
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -184,6 +187,13 @@ struct Buf {
         run_cmodel(host, L, c, H, W);
         return ms(t, clk::now());
     }
+#ifdef Y26_ATTN_INT
+    std::mutex am;                                 // one attention block
+    void attn(size_t x, size_t y, int nh, int n, AttnInt c) {
+        std::lock_guard<std::mutex> g(am);
+        y26_attn_top(reinterpret_cast<const ap_uint<128>*>(host + x), reinterpret_cast<ap_uint<128>*>(host + y), nh, n, c.m, c.g);
+    }
+#endif
 };
 }  // namespace
 #else
@@ -360,6 +370,34 @@ struct Buf {
         barrier();
         return k;
     }
+#ifdef Y26_ATTN_INT
+    // y26_attn_top s_axi_control, 64 KB (.hwh); register offsets from its driver header (xy26_attn_top_hw.h).
+    static constexpr uint64_t ATTN_REG_BASE = 0x80010000ull;
+    volatile uint32_t* areg = nullptr;
+    std::mutex am;
+    void attn(size_t x, size_t y, int nh, int n, AttnInt c) {
+        std::lock_guard<std::mutex> g(am);
+        if (!areg) {
+            const int fm = open("/dev/mem", O_RDWR | O_SYNC);
+            if (fm < 0) throw std::runtime_error("open /dev/mem failed (root?)");
+            void* r = mmap(nullptr, 0x10000, PROT_READ | PROT_WRITE, MAP_SHARED, fm, (off_t)ATTN_REG_BASE);
+            close(fm);
+            if (r == MAP_FAILED) throw std::runtime_error("mmap of the attention block failed");
+            areg = static_cast<volatile uint32_t*>(r);
+        }
+        if (!(areg[0] & 4)) throw std::runtime_error("attention block not idle");
+        auto w = [&](unsigned off, uint64_t v) { areg[off / 4] = (uint32_t)v; };
+        w(0x10, phys + x);  w(0x14, (phys + x) >> 32);
+        w(0x1c, phys + y);  w(0x20, (phys + y) >> 32);
+        w(0x28, nh);  w(0x30, n);  w(0x38, c.m);  w(0x40, c.g);
+        barrier();
+        const auto t0 = clk::now();
+        w(0x00, 1);                                    // ap_start
+        while (!(areg[0] & 2))                         // ap_done (clear-on-read)
+            if (ms(t0, clk::now()) > 5000) throw std::runtime_error("attention block timeout (5 s)");
+        barrier();
+    }
+#endif
 };
 }  // namespace
 #endif
@@ -505,7 +543,7 @@ static void quant_up2x(uint8_t* d, const float* a, int h, int w, float s, float 
 }
 // maxpool(5,1,2) as max over rows then columns. Max commutes with a monotone q, so pooling the codes == coding
 // the pool. Codes are >= 0, so zero padding gives the clipped window's max and every loop is branch-free.
-__attribute__((optimize("vect-cost-model=dynamic")))
+__attribute__((optimize("tree-vectorize", "vect-cost-model=dynamic")))
 static void pool_pass(uint8_t* __restrict d, uint8_t* __restrict r, uint8_t* __restrict p, int H, int W) {
     for (int y = 0; y < H; ++y) {                  // p = 0 0 row 0 0
         std::memcpy(p + 2, d + (size_t)y * W, W);
@@ -849,7 +887,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         for (size_t row = 0; row < (size_t)c.oc * OH; ++row) {
             const int ch = qoff + (int)(row / OH);
             const float qs = cons->ssc[ch], ql = cons->lo_of(ch), qt = cons->step_of(ch);
-            for (int w = 0; w < OW; ++w) d[row * OW + w] = y26_yq_code(s[row * YS + w], qs, ql, qt);
+            y26_yq_plane(d + row * OW, s + row * YS, OW, qs, ql, qt);
         }
         std::lock_guard<std::mutex> g(g_cmu);
         g_codes[y.d.data()] = {cons, qoff};
@@ -874,6 +912,40 @@ void* y26_tensor_alloc(size_t bytes) {
     ++arena().spilled;                             // full: plain heap; a conv writing into it takes the copy path
     return ::operator new(bytes);
 }
+#ifdef Y26_ATTN_INT
+// X: per [head][n] one 128-byte record {q[32], k[32], v[64]}; Y: J as int32, [head][n][64] (attention_engine.cpp).
+void y26_board_attn(const int8_t* q, const int8_t* k, const int8_t* v, int32_t* J, int NH, int N, int KD, int VD, AttnInt c) {
+    Y26_PROF("attention block (pack+unpack)");
+    if (KD != Y26_ATTN_KD || VD != Y26_ATTN_VD || NH > Y26_ATTN_NH || N > Y26_ATTN_NMAX)
+        throw std::runtime_error("attention: not a shape the PL block takes");
+    Buf& B = buf();
+    const size_t P = (size_t)NH * N, nx = P * 128, ny = P * VD * 4;
+    Region xr(nx, "attention X"), yr(ny, "attention Y");
+    uint8_t* X = B.host + xr.off;
+    for (size_t i = 0; i < P; ++i) {
+        std::memcpy(X + i * 128, q + i * KD, KD);
+        std::memcpy(X + i * 128 + 32, k + i * KD, KD);
+        std::memcpy(X + i * 128 + 64, v + i * VD, VD);
+    }
+    B.to_dev(xr.off, nx);
+    B.for_write(yr.off, ny);
+    { Y26_PROF("attention block (PL)"); B.attn(xr.off, yr.off, NH, N, c); }
+    B.from_dev(yr.off, ny);
+    std::memcpy(J, B.host + yr.off, ny);
+
+    static const char* sel = std::getenv("Y26_BOARD_CHECK");
+    if (sel && *sel) {
+        std::vector<int32_t> ref(P * VD);
+        for (int h = 0; h < NH; ++h)
+            y26_attn_int_head(q + (size_t)h * N * KD, k + (size_t)h * N * KD, v + (size_t)h * N * VD, &ref[(size_t)h * N * VD],
+                              N, KD, VD, c);
+        long bad = 0;
+        for (size_t i = 0; i < ref.size(); ++i) bad += ref[i] != J[i];
+        std::printf("[board] CHECK attention: %zu J vs C-model, %ld differ -> %s\n", ref.size(), bad, bad ? "MISMATCH" : "BIT-EXACT");
+    }
+}
+#endif
+
 void y26_tensor_free(void* p, size_t bytes) {
     uint8_t* q = static_cast<uint8_t*>(p);
     Buf& B = buf();

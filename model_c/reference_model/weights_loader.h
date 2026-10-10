@@ -83,6 +83,27 @@ struct FQ {
         }
         for (; j < n; ++j) d[j * stride] = (*this)(s[j * stride] * pre);
     }
+    // d[i] = (*this)(d[i] * pre[i % 8]) for i < 8*n: apply() down each of 8 interleaved columns, as one unit-stride pass.
+    void apply8(float* d, size_t n, const float* pre) const {
+        const float inv = 1.f / step;
+        float p[64];
+        for (int k = 0; k < 64; ++k) p[k] = pre[k & 7];
+        size_t j = 0;
+        for (; on && j + 64 <= n * 8; j += 64) {
+            float t[64];
+            int tie = 0;
+            for (int k = 0; k < 64; ++k) {
+                const float q = (d[j + k] * p[k] - lo) * inv;
+                float r = std::nearbyint(q);
+                tie |= std::fabs(q - r) > 0.5f - 0.000244140625f;
+                r = r < 0.f ? 0.f : (r > 255.f ? 255.f : r);
+                t[k] = r * step + lo;
+            }
+            if (tie) for (int k = 0; k < 64; ++k) t[k] = (*this)(d[j + k] * p[k]);
+            for (int k = 0; k < 64; ++k) d[j + k] = t[k];
+        }
+        for (; j < n * 8; ++j) d[j] = (*this)(d[j] * pre[j & 7]);
+    }
 };
 
 // The five quantizers OpenVINO places inside each Attention block. v has two, one per consumer.

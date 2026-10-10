@@ -36,12 +36,18 @@ esac
 # -ffp-contract=off: no FMA fusion, so float ops round as on the PC that produced the reference dumps.
 # x86: -msse4.1 inlines nearbyint and -fno-trapping-math lets GCC if-convert the clamp, so the quantizer
 # vectorizes as on the A53 (same IEEE results).
+# -ftree-vectorize: GCC before 12 does not vectorize at -O2, and the host has no hand-written NEON.
 case "$("$CXX" -dumpmachine)" in aarch64*) ARCH="-mcpu=cortex-a53";; x86_64*) ARCH="-msse4.1 -fno-trapping-math";; *) ARCH="";; esac
 # Y26_YQ8=1: code-mode host (-DY26_YQ8); pairs only with a bitstream built with -DY26_YQ8.
 [ "${Y26_YQ8:-0}" = 1 ] && { SHIP="$SHIP -DY26_YQ8"; OUT="${OUT}_yq8"; }
+# Integer attention (-DY26_ATTN_INT) is the default: on the board the bitstream's attention block computes it.
+# Y26_ATTN=0: float attention on the CPU instead (binary suffix _cpuattn); its output maps differ slightly.
+if [ "${Y26_ATTN:-1}" = 1 ]; then EXTRA="$EXTRA -DY26_ATTN_INT"; else OUT="${OUT}_cpuattn"; fi
 HOSTSRC=(); [ "$MODE" = exactcpu ] || HOSTSRC=("$HERE/board_host.cpp")   # quoted: the path may hold spaces
+# the PC stand-ins run the attention block's C source; the board drives the IP
+[ "${Y26_ATTN:-1}" = 1 ] && [ "$MODE" != board ] && [ "$MODE" != exactcpu ] && HOSTSRC+=("$M/hls_kernel/attention_engine.cpp")
 echo "[host] $CXX $MODE : $SHIP $EXTRA $ARCH"
-"$CXX" -O2 $ARCH -ffp-contract=off -std=c++17 -fopenmp -pthread -Wno-unknown-pragmas -I"$VITIS_INC" $SHIP $EXTRA \
+"$CXX" -O2 -ftree-vectorize $ARCH -ffp-contract=off -std=c++17 -fopenmp -pthread -Wno-unknown-pragmas -I"$VITIS_INC" $SHIP $EXTRA \
     "$M/reference_model/run_model.cpp" "$M/reference_model/yolo26_network.cpp" "$M/hls_kernel/conv_engine.cpp" "$M/hls_kernel/conv_engine_top.cpp" \
     "${HOSTSRC[@]}" -o "$OUTD/$OUT"
 echo "[host] -> $OUTD/$OUT"

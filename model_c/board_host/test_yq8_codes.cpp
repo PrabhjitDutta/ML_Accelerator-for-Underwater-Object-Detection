@@ -11,10 +11,12 @@
 int main() {
     std::mt19937 rng(7);
     std::uniform_real_distribution<float> U(0.f, 1.f);
-    long bad = 0, tot = 0, ties = 0, esc[2] = {0, 0}, n[2] = {0, 0};
+    long bad = 0, tot = 0, ties = 0, esc[2] = {0, 0}, n[2] = {0, 0}, pbad = 0;
     for (int t = 0; t < 20000; ++t) {
         const float s = std::ldexp(0.5f + U(rng), (int)(rng() % 9) - 4), st = std::ldexp(0.5f + U(rng), -(int)(rng() % 12));
         const float lo = (U(rng) - 0.5f) * 300.f * st;
+        uint32_t buf[400];
+        uint8_t code[400];
         for (int j = 0; j < 400; ++j) {
             float v;
             if (j % 2) v = ((U(rng) - 0.2f) * 330.f * st + lo) / s;                        // spread, both clamps
@@ -28,6 +30,7 @@ int main() {
             std::memcpy(&vb, &v, 4);
             const bool badesc = slot > 255 && slot - 256 != vb;
             const int want = (int)q_u8(v, s, lo, st), got = y26_yq_code(slot, s, lo, st);
+            buf[j] = slot; code[j] = (uint8_t)got;
             const float d = (v * s - lo) / st;
             ties += d == std::floor(d) + 0.5f;
             esc[j % 2] += slot > 255; ++n[j % 2];
@@ -35,7 +38,11 @@ int main() {
             if ((want != got || badesc) && bad <= 5)
                 std::printf("  v=%a s=%a lo=%a st=%a d=%a: q_u8 %d decoded %d slot %u\n", v, s, lo, st, d, want, got, slot);
         }
+        y26_yq_plane(reinterpret_cast<uint8_t*>(buf), buf, 400, s, lo, st);
+        pbad += std::memcmp(buf, code, 400) != 0;
     }
+    std::printf("test_yq8_codes: y26_yq_plane (in place) %ld slots differ from y26_yq_code\n", pbad);
+    bad += pbad;
     std::printf("test_yq8_codes: %ld values (%ld exact .5 ties), %ld differ -> %s; escapes %.3f%% of the near-tie half, %.3f%% of the spread half\n",
                 tot, ties, bad, bad ? "FAIL" : "PASS", 100.0 * esc[0] / n[0], 100.0 * esc[1] / n[1]);
     return bad != 0;

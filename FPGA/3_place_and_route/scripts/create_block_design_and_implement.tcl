@@ -1,6 +1,6 @@
 # ZCU102 block design for the per-conv kernel, then synthesis, implementation and bitstream.
 # The kernel is configured per conv at run time, so one bitstream runs the whole network.
-# args: <phase: validate|prep|build>  <clock MHz>  <outdir>  [ip repo]  [coh]
+# args: <phase: validate|prep|build>  <clock MHz>  <outdir>  [ip repo]  [coh | attn <attention ip repo>]
 set phase  [lindex $argv 0]
 set fmhz   [lindex $argv 1]
 set outdir [lindex $argv 2]
@@ -11,6 +11,11 @@ set iprepo [expr {$argc > 3 ? [lindex $argv 3] : "C:/hls_y26/prj_sol_ALL/sol_ALL
 # 5th arg `coh`: gmem_act -> S_AXI_HPC0_FPD, gmem_out -> S_AXI_HPC1_FPD, I/O-coherent through the CCI
 # (AxCACHE 1111, AxPROT 010), so the host can skip X/Y cache maintenance (Y26_COHERENT=1).
 set coh [expr {$argc > 4 && [lindex $argv 4] eq "coh"}]
+# 5th arg `attn` + 6th arg = the attention block's IP repo: adds y26_attn_top, control as a second slave on HPM0_LPD
+# (must land at 0x80010000, the host's ATTN_REG_BASE), gmem_attn 128-bit -> S_AXI_HPC0_FPD with the same port settings
+# as `coh`. The host always syncs the attention buffers.
+set attn [expr {$argc > 5 && [lindex $argv 4] eq "attn"}]
+if {$attn} { lappend iprepo [lindex $argv 5] }
 
 puts "### BRINGUP phase=$phase clk=${fmhz}MHz out=$outdir"
 file mkdir $outdir
@@ -55,6 +60,10 @@ if {$coh} {
     foreach k [list_property $ps] { if {[regexp -nocase {COHER|SNOOP|CCI|AFI_FS|SAXIGP0|SAXIGP1} $k]} { puts "###   $k = [get_property $k $ps]" } }
 }
 
+if {$attn} {
+    set_property -dict [list CONFIG.PSU__USE__S_AXI_GP0 {1} CONFIG.PSU__AFI0_COHERENCY {1}       CONFIG.PSU__SAXIGP0__DATA_WIDTH {128}] $ps
+}
+
 # The kernel.
 create_bd_cell -type ip -vlnv xilinx.com:hls:y26_conv_top:1.0 y26_conv_top_0
 if {$coh} {
@@ -63,6 +72,11 @@ if {$coh} {
       CONFIG.C_M_AXI_GMEM_OUT_CACHE_VALUE {"1111"} CONFIG.C_M_AXI_GMEM_OUT_PROT_VALUE {"010"} \
     ] [get_bd_cells y26_conv_top_0]
     foreach k {ACT_CACHE ACT_PROT OUT_CACHE OUT_PROT} { puts "### coh: $k = [get_property CONFIG.C_M_AXI_GMEM_${k}_VALUE [get_bd_cells y26_conv_top_0]]" }
+}
+
+if {$attn} {
+    create_bd_cell -type ip -vlnv xilinx.com:hls:y26_attn_top:1.0 y26_attn_top_0
+    set_property -dict [list CONFIG.C_M_AXI_GMEM_ATTN_CACHE_VALUE {"1111"} CONFIG.C_M_AXI_GMEM_ATTN_PROT_VALUE {"010"}]       [get_bd_cells y26_attn_top_0]
 }
 
 # Connections. Each automation is caught so a failure names itself.
@@ -87,9 +101,23 @@ foreach {m hp} $ports {
       [get_bd_intf_pins zynq_ultra_ps_e_0/$hp]
 }
 
+if {$attn} {
+    auto "PS M_AXI_HPM0_LPD -> attention s_axi_control"       -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto}         Master {/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD} Slave {/y26_attn_top_0/s_axi_control}         ddr_seg {Auto} intc_ip {Auto} master_apm {0}]       [get_bd_intf_pins y26_attn_top_0/s_axi_control]
+    auto "attention m_axi_gmem_attn -> PS S_AXI_HPC0_FPD"       -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto}         Master {/y26_attn_top_0/m_axi_gmem_attn} Slave {/zynq_ultra_ps_e_0/S_AXI_HPC0_FPD}         ddr_seg {Auto} intc_ip {New AXI SmartConnect} master_apm {0}]       [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HPC0_FPD]
+}
+
 assign_bd_address
 puts "### ---- address map ----"
 foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_conv_top_0]] { puts "###   $s" }
+foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_addr_spaces zynq_ultra_ps_e_0/Data]] {
+    puts "###   PS: $s  offset [get_property OFFSET $s]  range [get_property RANGE $s]"
+    if {[string match *conv_top* $s] && [get_property OFFSET $s] != 0x80000000} { puts "### !!! kernel control moved" ; exit 1 }
+    if {[string match *attn_top* $s] && [get_property OFFSET $s] != 0x80010000} { puts "### !!! attention control is not at 0x80010000" ; exit 1 }
+}
+if {$attn} {
+    foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_attn_top_0]] { puts "###   $s" }
+    foreach k {CACHE PROT} { puts "### attn: $k = [get_property CONFIG.C_M_AXI_GMEM_ATTN_${k}_VALUE [get_bd_cells y26_attn_top_0]]" }
+}
 regenerate_bd_layout
 save_bd_design
 puts "### ---- validate ----"
