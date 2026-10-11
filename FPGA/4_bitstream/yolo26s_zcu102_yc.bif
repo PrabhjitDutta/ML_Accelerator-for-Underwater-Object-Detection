@@ -1,0 +1,4 @@
+all:
+{
+    yolo26s_zcu102_yc.bit
+}

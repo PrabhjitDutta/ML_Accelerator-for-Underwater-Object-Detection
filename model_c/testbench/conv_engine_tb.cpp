@@ -72,6 +72,13 @@ int main(int argc, char** argv) {
     int yq_tested = 0, yq_failed = 0;
     long yq_clamp0 = 0, yq_clamp255 = 0, yq_elems = 0, yq_ties = 0;
 #endif
+#ifdef Y26_YC
+    // Direct codes: the one run also writes every output as a uint8 code under made-up per-oc params (range
+    // 0.5..3.5, zero point at code 0, 64 or 128). A code may differ from q_u8(kernel float) only by 1, at a near-tie.
+    std::vector<float>     pQk(Y26_DEPTH_OC), pQb(Y26_DEPTH_OC);
+    std::vector<y26_cw_t>  pYc(Y26_DEPTH_YCW);
+    long yc_elems = 0, yc_diff = 0, yc_far = 0, yc_c0 = 0, yc_c255 = 0;
+#endif
 
     int tested = 0, failed = 0, skipped = 0;
     double worst_ulp = 0.0;
@@ -227,13 +234,38 @@ int main(int argc, char** argv) {
 #else
         y26_yw_t* yptr = out;
 #endif
+#ifdef Y26_YC
+        for (int o = 0; o < c.oc; ++o) {
+            const float r = 0.5f * (float)(1 + o % 7), lo = -64.f * (float)(o % 3) * r / 255.f;
+            pQk[o] = 255.f / r;  pQb[o] = lo * pQk[o];
+        }
+#endif
         y26_conv_top(xptr, wptr, cfg.wsc, cfg.bias, cfg.step_v, cfg.lo_v, yptr,
                      H, W, cfg.oc, cfg.ic, cfg.kh, cfg.kw, cfg.sh, cfg.sw, cfg.ph, cfg.pw,
                      cfg.groups, cfg.act, cfg.perch, cfg.step, cfg.lo
 #ifdef Y26_YQ8
                      , 0, pQs.data(), pQlo.data(), pQst.data()
 #endif
+#ifdef Y26_YC
+                     , pYc.data(), 1, pQk.data(), pQb.data()
+#endif
                      );
+#ifdef Y26_YC
+        {
+            const uint8_t* cb = reinterpret_cast<const uint8_t*>(pYc.data());
+            const int OHt = golden.H, OWt = golden.W, YSq = Y26_TB_YS(OWt);
+            for (int o = 0; o < c.oc; ++o) {
+                const float r = 0.5f * (float)(1 + o % 7), lo = -64.f * (float)(o % 3) * r / 255.f;
+                for (int r_ = 0; r_ < OHt; ++r_)
+                    for (int w_ = 0; w_ < OWt; ++w_) {
+                        const size_t i = ((size_t)o * OHt + r_) * YSq + w_;
+                        const int want = (int)q_u8(out[i], 1.f, lo, r / 255.f), got = cb[i];
+                        yc_diff += got != want;  yc_far += got > want + 1 || want > got + 1;
+                        yc_c0 += got == 0;  yc_c255 += got == 255;  ++yc_elems;
+                    }
+            }
+        }
+#endif
 #ifdef Y26_YQ8
         if (do_yq) {
             // Per-oc params from the channel's own distribution: 5th percentile -> code 0, 95th -> 255.
@@ -324,6 +356,12 @@ int main(int argc, char** argv) {
                yq_elems ? 100.0 * yq_clamp255 / yq_elems : 0.0, yq_ties);
         if (yq_failed) { printf("\nFAIL - YQ8 codes differ from q_u8(kernel float).\n"); return 1; }
     }
+#endif
+#ifdef Y26_YC
+    printf("\n=== direct-codes gate: %ld codes, %ld differ from q_u8(kernel float) (%.4f%%), %ld by more than 1 "
+           "(%.1f%% at 0, %.1f%% at 255) ===\n", yc_elems, yc_diff, yc_elems ? 100.0 * yc_diff / yc_elems : 0.0, yc_far,
+           yc_elems ? 100.0 * yc_c0 / yc_elems : 0.0, yc_elems ? 100.0 * yc_c255 / yc_elems : 0.0);
+    if (yc_far || yc_diff * 1000 > yc_elems) { printf("\nFAIL - direct codes are not q_u8 up to near-ties.\n"); return 1; }
 #endif
 #ifdef Y26_FX_DEQUANT
     printf("\n=== stage-2 TOLERANCE gate: ap_fixed<%d,%d> dequant (%s, spatial %dx%d) ===\n",

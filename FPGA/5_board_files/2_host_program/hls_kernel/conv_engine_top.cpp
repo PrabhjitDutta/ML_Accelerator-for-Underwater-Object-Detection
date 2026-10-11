@@ -18,6 +18,9 @@ void y26_conv_top(const y26_xw_t*  X,
 #ifdef Y26_YQ8
                   , int yq, const float* q_s, const float* q_lo, const float* q_st
 #endif
+#ifdef Y26_YC
+                  , y26_cw_t* Yc, int yq, const float* q_k, const float* q_b
+#endif
                   ) {
     // Buffers: separate bundles so weight and activation traffic do not serialize.
     // depth= is for co-simulation only (see Y26_DEPTH_* in conv_engine.h).
@@ -79,6 +82,18 @@ void y26_conv_top(const y26_xw_t*  X,
     #pragma HLS INTERFACE s_axilite port=q_st bundle=control
     #pragma HLS INTERFACE s_axilite port=yq   bundle=control
 #endif
+#ifdef Y26_YC
+    // Yc on its own bundle: a 64-bit write port beside the 256-bit float one.
+    _Pragma(Y26_PRAGMA_STR(HLS INTERFACE m_axi port=Yc offset=slave bundle=gmem_code
+                           depth=Y26_DEPTH_YCW num_write_outstanding=Y26_OUT_NWO
+                           latency=Y26_OUT_LATENCY))
+    #pragma HLS INTERFACE m_axi port=q_k    offset=slave bundle=gmem_scale depth=Y26_DEPTH_OC
+    #pragma HLS INTERFACE m_axi port=q_b    offset=slave bundle=gmem_scale depth=Y26_DEPTH_OC
+    #pragma HLS INTERFACE s_axilite port=Yc   bundle=control
+    #pragma HLS INTERFACE s_axilite port=q_k  bundle=control
+    #pragma HLS INTERFACE s_axilite port=q_b  bundle=control
+    #pragma HLS INTERFACE s_axilite port=yq   bundle=control
+#endif
 
     // Base addresses, scalars, control.
     #pragma HLS INTERFACE s_axilite port=X      bundle=control
@@ -115,6 +130,10 @@ void y26_conv_top(const y26_xw_t*  X,
 #ifdef Y26_YQ8
     c.yq = yq; c.q_s = q_s; c.q_lo = q_lo; c.q_st = q_st;
 #endif
-
+#ifdef Y26_YC
+    c.yq = yq; c.q_k = q_k; c.q_b = q_b;
+    y26_conv2d_hls(X, H, W, Wt, c, Y, Yc);
+#else
     y26_conv2d_hls(X, H, W, Wt, c, Y);
+#endif
 }

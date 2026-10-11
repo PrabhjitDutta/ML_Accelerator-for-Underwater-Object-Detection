@@ -65,7 +65,11 @@ static inline float y26_q8_slot(float v, float s, float lo, float inv) {
 void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                     const y26_ww_t*  Wt,
                     const Y26ConvCfg& c,
-                    y26_yw_t* Y) {
+                    y26_yw_t* Y
+#ifdef Y26_YC
+                    , y26_cw_t* Yc
+#endif
+                    ) {
     const int OH   = y26_oh(H, c);
     const int OW   = y26_ow(W, c);
     // Checked once per conv. Compiled out of synthesis.
@@ -292,6 +296,21 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
         }
     }
 #endif
+#ifdef Y26_YC
+    static float pf_qk[Y26_MAX_OC], pf_qb[Y26_MAX_OC];
+    #pragma HLS BIND_STORAGE variable=pf_qk type=ram_1p impl=bram
+    #pragma HLS BIND_STORAGE variable=pf_qb type=ram_1p impl=bram
+    if (c.yq) {
+        for (int o = 0; o < c.oc; ++o) {
+            #pragma HLS PIPELINE II=1
+            pf_qk[o] = c.q_k[o];
+        }
+        for (int o = 0; o < c.oc; ++o) {
+            #pragma HLS PIPELINE II=1
+            pf_qb[o] = c.q_b[o];
+        }
+    }
+#endif
     if (c.perch) {
         for (int o = 0; o < c.oc; ++o) {
             #pragma HLS PIPELINE II=1
@@ -413,6 +432,11 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
         #pragma HLS ARRAY_PARTITION variable=qlo_o complete
         #pragma HLS ARRAY_PARTITION variable=qst_o complete
 #endif
+#ifdef Y26_YC
+        float qk_o[Y26_ACCP], qb_o[Y26_ACCP];
+        #pragma HLS ARRAY_PARTITION variable=qk_o complete
+        #pragma HLS ARRAY_PARTITION variable=qb_o complete
+#endif
 #else
         const float wsc_o  = c.wsc[oc];
 #ifdef Y26_FUSE_ON
@@ -453,6 +477,10 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
             qs_o[p]  = pf_qs[ocp];                    // stale when yq == 0: never used then
             qlo_o[p] = pf_qlo[ocp];
             qst_o[p] = pf_qst[ocp];
+#endif
+#ifdef Y26_YC
+            qk_o[p] = pf_qk[ocp];                     // stale when yq == 0: those codes go nowhere
+            qb_o[p] = pf_qb[ocp];
 #endif
 #ifdef Y26_FUSE_ON
             step_o[p] = pf_step[ocp];   // L-FUSE: already wsc*step, filled on both arms above
@@ -1193,6 +1221,10 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 const float qlo_op = qlo_o[p];
                 const float qst_op = qst_o[p];
 #endif
+#ifdef Y26_YC
+                const y26_qk_t qk_m = qk_o[p];        // converted once per member, as the dequant scales
+                const y26_qb_t qb_m = qb_o[p];
+#endif
 #else
             {
                 const int   p     = 0;
@@ -1229,6 +1261,11 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
 #else
             #define Y26_YQ(v_) (v_)
 #endif
+#ifdef Y26_YC
+            #define Y26_YCODE(n_, v_) cword.range((n_) * 8 + 7, (n_) * 8) = y26_qc((v_), qk_m, qb_m)
+#else
+            #define Y26_YCODE(n_, v_)
+#endif
 #if defined(Y26_YDIRECT_ON)
             #define Y26_YOUT(n_, owl_) wlane[(n_)]
 #elif Y26_YPE > 1
@@ -1253,6 +1290,9 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                     #pragma HLS UNROLL
                     wlane[n] = 0.0f;
                 }
+#endif
+#ifdef Y26_YC
+                y26_cw_t cword = 0;                   // pad lanes stay 0
 #endif
                 // Per-column-tap sum over the kh's live for this output row. All lanes share `er`, so this is computed once per
                 // iteration and unrolls into <= 9 predicated adds.
@@ -1303,10 +1343,12 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 // Fully fixed-point: no float/double core for the activation.
                 if (c.act == 1) v = y26_silu_fx(v);
                 Y26_YOUT(n, owl) = Y26_YQ(v.to_float());
+                Y26_YCODE(n, v);
 #else
                 float vf = v.to_float();
                 if (c.act == 1) vf = y26_silu(vf);   // still double std::exp - see y26_silu_fx
                 Y26_YOUT(n, owl) = Y26_YQ(vf);
+                Y26_YCODE(n, (y26_fx_t)vf);
 #endif
 #else
                 // Float dequant (default): bit-exact vs conv2d(). Promotion order matches conv2d() exactly.
@@ -1315,6 +1357,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                 float v = (float)(wsc_op * (step_op * a + lo_op * aw)) + bs_p;
                 if (c.act == 1) v = y26_silu(v);
                 Y26_YOUT(n, owl) = Y26_YQ(v);
+                Y26_YCODE(n, (y26_fx_t)v);
 #endif
               }
 #ifdef Y26_YDIRECT_ON
@@ -1329,6 +1372,9 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                     Y[ywbase + gi] = word;   // gi == the store loop's `w`
                 }
 #endif
+#ifdef Y26_YC
+                Yc[ywbase + gi] = cword;     // same index: Y26_YPE == Y26_EPI_WIDE elements per word on both ports
+#endif
                 ow += Y26_EPI_WIDE;
                 ++gi;
                 if (ow >= OWP) { ow = 0; ++er; ybase += (y26_idx_t)OW; }
@@ -1342,6 +1388,7 @@ void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
 #endif
             }
             #undef Y26_YOUT
+            #undef Y26_YCODE
             #undef Y26_YQ
 #if Y26_YPE > 1 && !defined(Y26_YDIRECT_ON)
             // Store: one m_axi beat per Y26_YPE outputs; this loop sets store throughput. A beat must be Y26_YPE-aligned in

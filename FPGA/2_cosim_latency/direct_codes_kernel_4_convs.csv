@@ -1,0 +1,5 @@
+conv,cycles_this_kernel,cycles_previous_kernel,source
+13.m.0.m.0.cv1.conv,79932,79588,cosim_yc
+6.m.0.m.0.cv1.conv,80036,79688,cosim_yc
+23.one2one_cv2.1.0.conv,150504,150156,cosim_yc
+4.m.0.cv1.conv,159528,159216,cosim_yc

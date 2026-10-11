@@ -34,14 +34,15 @@ Each folder has its own `README.md` with the details.
 | | |
 |---|---|
 | FPGA clock | 250 MHz, timing met |
-| Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA's convolutions only (its attention block adds 4.7 ms). |
-| On the board, whole program | **205.9 ms per image, 4.86 images per second** (20 test images, one at a time). This includes the ARM processor's share of the work. |
-| Chip resources used | 31% of logic (LUTs), 27% of block RAM, 42% of DSP blocks |
+| Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA's convolutions only (its attention block adds 4.7 ms). The figure is from the previous kernel build; the current one adds 0.2 to 0.4% on the four layers that were simulated again. |
+| On the board, whole program | **191.7 ms per image, 5.22 images per second** (20 test images, one at a time); **8.4 images per second** with four images overlapped. This includes the ARM processor's share of the work. |
+| Chip resources used | 32% of logic (LUTs), 27% of block RAM, 43% of DSP blocks |
 | Correctness | On the board, the FPGA matches the C++ reference exactly on all 100 convolution layers and on both attention layers. |
-| Accuracy | mAP50 0.754 on the 800 URPC2018 validation images, measured on the board. |
+| Accuracy | mAP50 0.755 on the 800 URPC2018 validation images, from the board program run on a PC; on the board it gives the same detections on the 20 test images. |
 
 **Status:** the design runs on the ZCU102. The FPGA computes every convolution and the core of the two attention
-layers; the ARM processor does the rest.
+layers; the ARM processor does the rest. Where one convolution feeds the next directly, the FPGA writes its
+result in the 8-bit form the next convolution reads, so the processor does not touch that data.
 
 ## Quick start
 

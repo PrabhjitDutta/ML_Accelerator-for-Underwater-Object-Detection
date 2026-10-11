@@ -280,6 +280,12 @@ struct Y26ConvCfg {
     const float* q_lo;
     const float* q_st;
 #endif
+#ifdef Y26_YC
+    // Direct codes (see y26_qc). yq != 0: q_k/q_b are read. The codes are written either way.
+    int yq;
+    const float* q_k;     // [oc] the consumer's ssc/step for this output channel
+    const float* q_b;     // [oc] the consumer's lo/step
+#endif
 };
 
 #ifdef Y26_YQ8
@@ -314,6 +320,29 @@ inline ap_uint<32> y26_q8(float v, float s, float lo, float inv) {
 }
 #endif
 
+#ifdef Y26_YC
+// Direct codes: beside the float Y, every output is also written as the uint8 code its consumer conv reads,
+//   code = clamp(floor(v*k - b + 1/2), 0, 255),  k = ssc/step and b = lo/step of the consumer's input channel,
+// into Yc, one byte per element at Y's element index. With OW % Y26_EPI_WIDE == 0 that is the consumer's X layout,
+// so the host points Yc at the consumer's X and never touches the data. The host points whichever of Y / Yc it
+// does not need at memory nobody reads. It must keep 1 <= k < 65536 and -256 <= b <= 0: then saturating v at +-512
+// cannot change a code.
+#if defined(Y26_YQ8) || !defined(Y26_PREFETCH) || !defined(Y26_OCPACK) || !defined(Y26_YDIRECT_ON) || \
+    defined(Y26_EFLAT_ON) || (Y26_YPE != Y26_EPI_WIDE)
+#error "Y26_YC needs the OCPACK + PREFETCH + YDIRECT epilogue, without Y26_YQ8 or Y26_EFLAT"
+#endif
+typedef ap_uint<8 * Y26_EPI_WIDE>          y26_cw_t;   // one epilogue group of codes (gmem_code port word)
+typedef ap_ufixed<32, 16, AP_RND, AP_SAT>  y26_qk_t;
+typedef ap_fixed<20, 10, AP_RND, AP_SAT>   y26_qb_t;
+inline ap_uint<8> y26_qc(y26_fx_t v, y26_qk_t k, y26_qb_t b) {
+    const ap_fixed<34, 10, AP_TRN, AP_SAT> vs = v;
+    const ap_fixed<38, 28> m = vs * k - b + y26_qb_t(0.5);   // |vs*k| < 2^25; truncated at 2^-10
+    if (m < 0) return 0;
+    if (m >= 256) return 255;
+    return (ap_uint<8>)m.range(17, 10);
+}
+#endif
+
 // One conv over pre-quantized activation codes.
 //   X   [ic][H][W]                uint8 activation codes
 //   Wt  [oc][ic/groups][kh][kw]   int8 weight codes
@@ -322,7 +351,11 @@ inline ap_uint<32> y26_q8(float v, float s, float lo, float inv) {
 void y26_conv2d_hls(const y26_xw_t* X, int H, int W,
                     const y26_ww_t*  Wt,
                     const Y26ConvCfg& c,
-                    y26_yw_t* Y);        // `float*` unless -DY26_OUT_WORD widens gmem_out
+                    y26_yw_t* Y          // `float*` unless -DY26_OUT_WORD widens gmem_out
+#ifdef Y26_YC
+                    , y26_cw_t* Yc       // [oc][OH][YS] uint8 codes, Y26_EPI_WIDE per word
+#endif
+                    );
 
 // Output dims, shared by kernel and host so they cannot drift apart.
 inline int y26_oh(int H, const Y26ConvCfg& c) { return (H + 2 * c.ph - c.kh) / c.sh + 1; }
@@ -343,6 +376,7 @@ inline int y26_ow(int W, const Y26ConvCfg& c) { return (W + 2 * c.pw - c.kw) / c
 #define Y26_DEPTH_XW   (Y26_DEPTH_X / Y26_XPE)
 // Same for the output port.
 #define Y26_DEPTH_YW   (Y26_DEPTH_Y / Y26_YPE)
+#define Y26_DEPTH_YCW  (Y26_DEPTH_Y / Y26_EPI_WIDE)
 #ifndef Y26_DEPTH_WT
 #if Y26_WPE > 1
 // Padded weight blob: worst case adds (Y26_WPE-1) elements per (oc, tap).
@@ -373,5 +407,8 @@ void y26_conv_top(const y26_xw_t*  X,        // activations (m_axi, Y26_ACT_WORD
                   float step, float lo
 #ifdef Y26_YQ8
                   , int yq, const float* q_s, const float* q_lo, const float* q_st
+#endif
+#ifdef Y26_YC
+                  , y26_cw_t* Yc, int yq, const float* q_k, const float* q_b   // codes (m_axi), see y26_qc
 #endif
                   );

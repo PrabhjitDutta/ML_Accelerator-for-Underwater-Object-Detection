@@ -8,7 +8,7 @@
 `timescale 1ns/1ps
 (* DowngradeIPIdentifiedWarnings="yes" *) module y26_conv_top_control_s_axi
 #(parameter
-    C_S_AXI_ADDR_WIDTH = 8,
+    C_S_AXI_ADDR_WIDTH = 9,
     C_S_AXI_DATA_WIDTH = 32
 )(
     input  wire                          ACLK,
@@ -54,6 +54,10 @@
     output wire [31:0]                   perch,
     output wire [31:0]                   step,
     output wire [31:0]                   lo,
+    output wire [63:0]                   Yc,
+    output wire [31:0]                   yq,
+    output wire [63:0]                   q_k,
+    output wire [63:0]                   q_b,
     output wire                          ap_start,
     input  wire                          ap_done,
     input  wire                          ap_ready,
@@ -62,164 +66,193 @@
 //------------------------Address Info-------------------
 // Protocol Used: ap_ctrl_hs
 //
-// 0x00 : Control signals
-//        bit 0  - ap_start (Read/Write/COH)
-//        bit 1  - ap_done (Read/COR)
-//        bit 2  - ap_idle (Read)
-//        bit 3  - ap_ready (Read/COR)
-//        bit 7  - auto_restart (Read/Write)
-//        bit 9  - interrupt (Read)
-//        others - reserved
-// 0x04 : Global Interrupt Enable Register
-//        bit 0  - Global Interrupt Enable (Read/Write)
-//        others - reserved
-// 0x08 : IP Interrupt Enable Register (Read/Write)
-//        bit 0 - enable ap_done interrupt (Read/Write)
-//        bit 1 - enable ap_ready interrupt (Read/Write)
-//        others - reserved
-// 0x0c : IP Interrupt Status Register (Read/TOW)
-//        bit 0 - ap_done (Read/TOW)
-//        bit 1 - ap_ready (Read/TOW)
-//        others - reserved
-// 0x10 : Data signal of X
-//        bit 31~0 - X[31:0] (Read/Write)
-// 0x14 : Data signal of X
-//        bit 31~0 - X[63:32] (Read/Write)
-// 0x18 : reserved
-// 0x1c : Data signal of Wt
-//        bit 31~0 - Wt[31:0] (Read/Write)
-// 0x20 : Data signal of Wt
-//        bit 31~0 - Wt[63:32] (Read/Write)
-// 0x24 : reserved
-// 0x28 : Data signal of wsc
-//        bit 31~0 - wsc[31:0] (Read/Write)
-// 0x2c : Data signal of wsc
-//        bit 31~0 - wsc[63:32] (Read/Write)
-// 0x30 : reserved
-// 0x34 : Data signal of bias
-//        bit 31~0 - bias[31:0] (Read/Write)
-// 0x38 : Data signal of bias
-//        bit 31~0 - bias[63:32] (Read/Write)
-// 0x3c : reserved
-// 0x40 : Data signal of step_v
-//        bit 31~0 - step_v[31:0] (Read/Write)
-// 0x44 : Data signal of step_v
-//        bit 31~0 - step_v[63:32] (Read/Write)
-// 0x48 : reserved
-// 0x4c : Data signal of lo_v
-//        bit 31~0 - lo_v[31:0] (Read/Write)
-// 0x50 : Data signal of lo_v
-//        bit 31~0 - lo_v[63:32] (Read/Write)
-// 0x54 : reserved
-// 0x58 : Data signal of Y
-//        bit 31~0 - Y[31:0] (Read/Write)
-// 0x5c : Data signal of Y
-//        bit 31~0 - Y[63:32] (Read/Write)
-// 0x60 : reserved
-// 0x64 : Data signal of H
-//        bit 31~0 - H[31:0] (Read/Write)
-// 0x68 : reserved
-// 0x6c : Data signal of W
-//        bit 31~0 - W[31:0] (Read/Write)
-// 0x70 : reserved
-// 0x74 : Data signal of oc
-//        bit 31~0 - oc[31:0] (Read/Write)
-// 0x78 : reserved
-// 0x7c : Data signal of ic
-//        bit 31~0 - ic[31:0] (Read/Write)
-// 0x80 : reserved
-// 0x84 : Data signal of kh
-//        bit 31~0 - kh[31:0] (Read/Write)
-// 0x88 : reserved
-// 0x8c : Data signal of kw
-//        bit 31~0 - kw[31:0] (Read/Write)
-// 0x90 : reserved
-// 0x94 : Data signal of sh
-//        bit 31~0 - sh[31:0] (Read/Write)
-// 0x98 : reserved
-// 0x9c : Data signal of sw
-//        bit 31~0 - sw[31:0] (Read/Write)
-// 0xa0 : reserved
-// 0xa4 : Data signal of ph
-//        bit 31~0 - ph[31:0] (Read/Write)
-// 0xa8 : reserved
-// 0xac : Data signal of pw
-//        bit 31~0 - pw[31:0] (Read/Write)
-// 0xb0 : reserved
-// 0xb4 : Data signal of groups
-//        bit 31~0 - groups[31:0] (Read/Write)
-// 0xb8 : reserved
-// 0xbc : Data signal of act
-//        bit 31~0 - act[31:0] (Read/Write)
-// 0xc0 : reserved
-// 0xc4 : Data signal of perch
-//        bit 31~0 - perch[31:0] (Read/Write)
-// 0xc8 : reserved
-// 0xcc : Data signal of step
-//        bit 31~0 - step[31:0] (Read/Write)
-// 0xd0 : reserved
-// 0xd4 : Data signal of lo
-//        bit 31~0 - lo[31:0] (Read/Write)
-// 0xd8 : reserved
+// 0x000 : Control signals
+//         bit 0  - ap_start (Read/Write/COH)
+//         bit 1  - ap_done (Read/COR)
+//         bit 2  - ap_idle (Read)
+//         bit 3  - ap_ready (Read/COR)
+//         bit 7  - auto_restart (Read/Write)
+//         bit 9  - interrupt (Read)
+//         others - reserved
+// 0x004 : Global Interrupt Enable Register
+//         bit 0  - Global Interrupt Enable (Read/Write)
+//         others - reserved
+// 0x008 : IP Interrupt Enable Register (Read/Write)
+//         bit 0 - enable ap_done interrupt (Read/Write)
+//         bit 1 - enable ap_ready interrupt (Read/Write)
+//         others - reserved
+// 0x00c : IP Interrupt Status Register (Read/TOW)
+//         bit 0 - ap_done (Read/TOW)
+//         bit 1 - ap_ready (Read/TOW)
+//         others - reserved
+// 0x010 : Data signal of X
+//         bit 31~0 - X[31:0] (Read/Write)
+// 0x014 : Data signal of X
+//         bit 31~0 - X[63:32] (Read/Write)
+// 0x018 : reserved
+// 0x01c : Data signal of Wt
+//         bit 31~0 - Wt[31:0] (Read/Write)
+// 0x020 : Data signal of Wt
+//         bit 31~0 - Wt[63:32] (Read/Write)
+// 0x024 : reserved
+// 0x028 : Data signal of wsc
+//         bit 31~0 - wsc[31:0] (Read/Write)
+// 0x02c : Data signal of wsc
+//         bit 31~0 - wsc[63:32] (Read/Write)
+// 0x030 : reserved
+// 0x034 : Data signal of bias
+//         bit 31~0 - bias[31:0] (Read/Write)
+// 0x038 : Data signal of bias
+//         bit 31~0 - bias[63:32] (Read/Write)
+// 0x03c : reserved
+// 0x040 : Data signal of step_v
+//         bit 31~0 - step_v[31:0] (Read/Write)
+// 0x044 : Data signal of step_v
+//         bit 31~0 - step_v[63:32] (Read/Write)
+// 0x048 : reserved
+// 0x04c : Data signal of lo_v
+//         bit 31~0 - lo_v[31:0] (Read/Write)
+// 0x050 : Data signal of lo_v
+//         bit 31~0 - lo_v[63:32] (Read/Write)
+// 0x054 : reserved
+// 0x058 : Data signal of Y
+//         bit 31~0 - Y[31:0] (Read/Write)
+// 0x05c : Data signal of Y
+//         bit 31~0 - Y[63:32] (Read/Write)
+// 0x060 : reserved
+// 0x064 : Data signal of H
+//         bit 31~0 - H[31:0] (Read/Write)
+// 0x068 : reserved
+// 0x06c : Data signal of W
+//         bit 31~0 - W[31:0] (Read/Write)
+// 0x070 : reserved
+// 0x074 : Data signal of oc
+//         bit 31~0 - oc[31:0] (Read/Write)
+// 0x078 : reserved
+// 0x07c : Data signal of ic
+//         bit 31~0 - ic[31:0] (Read/Write)
+// 0x080 : reserved
+// 0x084 : Data signal of kh
+//         bit 31~0 - kh[31:0] (Read/Write)
+// 0x088 : reserved
+// 0x08c : Data signal of kw
+//         bit 31~0 - kw[31:0] (Read/Write)
+// 0x090 : reserved
+// 0x094 : Data signal of sh
+//         bit 31~0 - sh[31:0] (Read/Write)
+// 0x098 : reserved
+// 0x09c : Data signal of sw
+//         bit 31~0 - sw[31:0] (Read/Write)
+// 0x0a0 : reserved
+// 0x0a4 : Data signal of ph
+//         bit 31~0 - ph[31:0] (Read/Write)
+// 0x0a8 : reserved
+// 0x0ac : Data signal of pw
+//         bit 31~0 - pw[31:0] (Read/Write)
+// 0x0b0 : reserved
+// 0x0b4 : Data signal of groups
+//         bit 31~0 - groups[31:0] (Read/Write)
+// 0x0b8 : reserved
+// 0x0bc : Data signal of act
+//         bit 31~0 - act[31:0] (Read/Write)
+// 0x0c0 : reserved
+// 0x0c4 : Data signal of perch
+//         bit 31~0 - perch[31:0] (Read/Write)
+// 0x0c8 : reserved
+// 0x0cc : Data signal of step
+//         bit 31~0 - step[31:0] (Read/Write)
+// 0x0d0 : reserved
+// 0x0d4 : Data signal of lo
+//         bit 31~0 - lo[31:0] (Read/Write)
+// 0x0d8 : reserved
+// 0x0dc : Data signal of Yc
+//         bit 31~0 - Yc[31:0] (Read/Write)
+// 0x0e0 : Data signal of Yc
+//         bit 31~0 - Yc[63:32] (Read/Write)
+// 0x0e4 : reserved
+// 0x0e8 : Data signal of yq
+//         bit 31~0 - yq[31:0] (Read/Write)
+// 0x0ec : reserved
+// 0x0f0 : Data signal of q_k
+//         bit 31~0 - q_k[31:0] (Read/Write)
+// 0x0f4 : Data signal of q_k
+//         bit 31~0 - q_k[63:32] (Read/Write)
+// 0x0f8 : reserved
+// 0x0fc : Data signal of q_b
+//         bit 31~0 - q_b[31:0] (Read/Write)
+// 0x100 : Data signal of q_b
+//         bit 31~0 - q_b[63:32] (Read/Write)
+// 0x104 : reserved
 // (SC = Self Clear, COR = Clear on Read, TOW = Toggle on Write, COH = Clear on Handshake)
 
 //------------------------Parameter----------------------
 localparam
-    ADDR_AP_CTRL       = 8'h00,
-    ADDR_GIE           = 8'h04,
-    ADDR_IER           = 8'h08,
-    ADDR_ISR           = 8'h0c,
-    ADDR_X_DATA_0      = 8'h10,
-    ADDR_X_DATA_1      = 8'h14,
-    ADDR_X_CTRL        = 8'h18,
-    ADDR_WT_DATA_0     = 8'h1c,
-    ADDR_WT_DATA_1     = 8'h20,
-    ADDR_WT_CTRL       = 8'h24,
-    ADDR_WSC_DATA_0    = 8'h28,
-    ADDR_WSC_DATA_1    = 8'h2c,
-    ADDR_WSC_CTRL      = 8'h30,
-    ADDR_BIAS_DATA_0   = 8'h34,
-    ADDR_BIAS_DATA_1   = 8'h38,
-    ADDR_BIAS_CTRL     = 8'h3c,
-    ADDR_STEP_V_DATA_0 = 8'h40,
-    ADDR_STEP_V_DATA_1 = 8'h44,
-    ADDR_STEP_V_CTRL   = 8'h48,
-    ADDR_LO_V_DATA_0   = 8'h4c,
-    ADDR_LO_V_DATA_1   = 8'h50,
-    ADDR_LO_V_CTRL     = 8'h54,
-    ADDR_Y_DATA_0      = 8'h58,
-    ADDR_Y_DATA_1      = 8'h5c,
-    ADDR_Y_CTRL        = 8'h60,
-    ADDR_H_DATA_0      = 8'h64,
-    ADDR_H_CTRL        = 8'h68,
-    ADDR_W_DATA_0      = 8'h6c,
-    ADDR_W_CTRL        = 8'h70,
-    ADDR_OC_DATA_0     = 8'h74,
-    ADDR_OC_CTRL       = 8'h78,
-    ADDR_IC_DATA_0     = 8'h7c,
-    ADDR_IC_CTRL       = 8'h80,
-    ADDR_KH_DATA_0     = 8'h84,
-    ADDR_KH_CTRL       = 8'h88,
-    ADDR_KW_DATA_0     = 8'h8c,
-    ADDR_KW_CTRL       = 8'h90,
-    ADDR_SH_DATA_0     = 8'h94,
-    ADDR_SH_CTRL       = 8'h98,
-    ADDR_SW_DATA_0     = 8'h9c,
-    ADDR_SW_CTRL       = 8'ha0,
-    ADDR_PH_DATA_0     = 8'ha4,
-    ADDR_PH_CTRL       = 8'ha8,
-    ADDR_PW_DATA_0     = 8'hac,
-    ADDR_PW_CTRL       = 8'hb0,
-    ADDR_GROUPS_DATA_0 = 8'hb4,
-    ADDR_GROUPS_CTRL   = 8'hb8,
-    ADDR_ACT_DATA_0    = 8'hbc,
-    ADDR_ACT_CTRL      = 8'hc0,
-    ADDR_PERCH_DATA_0  = 8'hc4,
-    ADDR_PERCH_CTRL    = 8'hc8,
-    ADDR_STEP_DATA_0   = 8'hcc,
-    ADDR_STEP_CTRL     = 8'hd0,
-    ADDR_LO_DATA_0     = 8'hd4,
-    ADDR_LO_CTRL       = 8'hd8,
+    ADDR_AP_CTRL       = 9'h000,
+    ADDR_GIE           = 9'h004,
+    ADDR_IER           = 9'h008,
+    ADDR_ISR           = 9'h00c,
+    ADDR_X_DATA_0      = 9'h010,
+    ADDR_X_DATA_1      = 9'h014,
+    ADDR_X_CTRL        = 9'h018,
+    ADDR_WT_DATA_0     = 9'h01c,
+    ADDR_WT_DATA_1     = 9'h020,
+    ADDR_WT_CTRL       = 9'h024,
+    ADDR_WSC_DATA_0    = 9'h028,
+    ADDR_WSC_DATA_1    = 9'h02c,
+    ADDR_WSC_CTRL      = 9'h030,
+    ADDR_BIAS_DATA_0   = 9'h034,
+    ADDR_BIAS_DATA_1   = 9'h038,
+    ADDR_BIAS_CTRL     = 9'h03c,
+    ADDR_STEP_V_DATA_0 = 9'h040,
+    ADDR_STEP_V_DATA_1 = 9'h044,
+    ADDR_STEP_V_CTRL   = 9'h048,
+    ADDR_LO_V_DATA_0   = 9'h04c,
+    ADDR_LO_V_DATA_1   = 9'h050,
+    ADDR_LO_V_CTRL     = 9'h054,
+    ADDR_Y_DATA_0      = 9'h058,
+    ADDR_Y_DATA_1      = 9'h05c,
+    ADDR_Y_CTRL        = 9'h060,
+    ADDR_H_DATA_0      = 9'h064,
+    ADDR_H_CTRL        = 9'h068,
+    ADDR_W_DATA_0      = 9'h06c,
+    ADDR_W_CTRL        = 9'h070,
+    ADDR_OC_DATA_0     = 9'h074,
+    ADDR_OC_CTRL       = 9'h078,
+    ADDR_IC_DATA_0     = 9'h07c,
+    ADDR_IC_CTRL       = 9'h080,
+    ADDR_KH_DATA_0     = 9'h084,
+    ADDR_KH_CTRL       = 9'h088,
+    ADDR_KW_DATA_0     = 9'h08c,
+    ADDR_KW_CTRL       = 9'h090,
+    ADDR_SH_DATA_0     = 9'h094,
+    ADDR_SH_CTRL       = 9'h098,
+    ADDR_SW_DATA_0     = 9'h09c,
+    ADDR_SW_CTRL       = 9'h0a0,
+    ADDR_PH_DATA_0     = 9'h0a4,
+    ADDR_PH_CTRL       = 9'h0a8,
+    ADDR_PW_DATA_0     = 9'h0ac,
+    ADDR_PW_CTRL       = 9'h0b0,
+    ADDR_GROUPS_DATA_0 = 9'h0b4,
+    ADDR_GROUPS_CTRL   = 9'h0b8,
+    ADDR_ACT_DATA_0    = 9'h0bc,
+    ADDR_ACT_CTRL      = 9'h0c0,
+    ADDR_PERCH_DATA_0  = 9'h0c4,
+    ADDR_PERCH_CTRL    = 9'h0c8,
+    ADDR_STEP_DATA_0   = 9'h0cc,
+    ADDR_STEP_CTRL     = 9'h0d0,
+    ADDR_LO_DATA_0     = 9'h0d4,
+    ADDR_LO_CTRL       = 9'h0d8,
+    ADDR_YC_DATA_0     = 9'h0dc,
+    ADDR_YC_DATA_1     = 9'h0e0,
+    ADDR_YC_CTRL       = 9'h0e4,
+    ADDR_YQ_DATA_0     = 9'h0e8,
+    ADDR_YQ_CTRL       = 9'h0ec,
+    ADDR_Q_K_DATA_0    = 9'h0f0,
+    ADDR_Q_K_DATA_1    = 9'h0f4,
+    ADDR_Q_K_CTRL      = 9'h0f8,
+    ADDR_Q_B_DATA_0    = 9'h0fc,
+    ADDR_Q_B_DATA_1    = 9'h100,
+    ADDR_Q_B_CTRL      = 9'h104,
     WRIDLE             = 2'd0,
     WRDATA             = 2'd1,
     WRRESP             = 2'd2,
@@ -227,7 +260,7 @@ localparam
     RDIDLE             = 2'd0,
     RDDATA             = 2'd1,
     RDRESET            = 2'd2,
-    ADDR_BITS                = 8;
+    ADDR_BITS                = 9;
 
 //------------------------Local signal-------------------
     reg  [1:0]                    wstate = WRRESET;
@@ -278,6 +311,10 @@ localparam
     reg  [31:0]                   int_perch = 'b0;
     reg  [31:0]                   int_step = 'b0;
     reg  [31:0]                   int_lo = 'b0;
+    reg  [63:0]                   int_Yc = 'b0;
+    reg  [31:0]                   int_yq = 'b0;
+    reg  [63:0]                   int_q_k = 'b0;
+    reg  [63:0]                   int_q_b = 'b0;
 
 //------------------------Instantiation------------------
 
@@ -474,6 +511,27 @@ always @(posedge ACLK) begin
                 ADDR_LO_DATA_0: begin
                     rdata <= int_lo[31:0];
                 end
+                ADDR_YC_DATA_0: begin
+                    rdata <= int_Yc[31:0];
+                end
+                ADDR_YC_DATA_1: begin
+                    rdata <= int_Yc[63:32];
+                end
+                ADDR_YQ_DATA_0: begin
+                    rdata <= int_yq[31:0];
+                end
+                ADDR_Q_K_DATA_0: begin
+                    rdata <= int_q_k[31:0];
+                end
+                ADDR_Q_K_DATA_1: begin
+                    rdata <= int_q_k[63:32];
+                end
+                ADDR_Q_B_DATA_0: begin
+                    rdata <= int_q_b[31:0];
+                end
+                ADDR_Q_B_DATA_1: begin
+                    rdata <= int_q_b[63:32];
+                end
             endcase
         end
     end
@@ -508,6 +566,10 @@ assign act               = int_act;
 assign perch             = int_perch;
 assign step              = int_step;
 assign lo                = int_lo;
+assign Yc                = int_Yc;
+assign yq                = int_yq;
+assign q_k               = int_q_k;
+assign q_b               = int_q_b;
 // int_interrupt
 always @(posedge ACLK) begin
     if (ARESET)
@@ -927,6 +989,76 @@ always @(posedge ACLK) begin
     else if (ACLK_EN) begin
         if (w_hs && waddr == ADDR_LO_DATA_0)
             int_lo[31:0] <= (WDATA[31:0] & wmask) | (int_lo[31:0] & ~wmask);
+    end
+end
+
+// int_Yc[31:0]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_Yc[31:0] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_YC_DATA_0)
+            int_Yc[31:0] <= (WDATA[31:0] & wmask) | (int_Yc[31:0] & ~wmask);
+    end
+end
+
+// int_Yc[63:32]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_Yc[63:32] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_YC_DATA_1)
+            int_Yc[63:32] <= (WDATA[31:0] & wmask) | (int_Yc[63:32] & ~wmask);
+    end
+end
+
+// int_yq[31:0]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_yq[31:0] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_YQ_DATA_0)
+            int_yq[31:0] <= (WDATA[31:0] & wmask) | (int_yq[31:0] & ~wmask);
+    end
+end
+
+// int_q_k[31:0]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_q_k[31:0] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_Q_K_DATA_0)
+            int_q_k[31:0] <= (WDATA[31:0] & wmask) | (int_q_k[31:0] & ~wmask);
+    end
+end
+
+// int_q_k[63:32]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_q_k[63:32] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_Q_K_DATA_1)
+            int_q_k[63:32] <= (WDATA[31:0] & wmask) | (int_q_k[63:32] & ~wmask);
+    end
+end
+
+// int_q_b[31:0]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_q_b[31:0] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_Q_B_DATA_0)
+            int_q_b[31:0] <= (WDATA[31:0] & wmask) | (int_q_b[31:0] & ~wmask);
+    end
+end
+
+// int_q_b[63:32]
+always @(posedge ACLK) begin
+    if (ARESET)
+        int_q_b[63:32] <= 0;
+    else if (ACLK_EN) begin
+        if (w_hs && waddr == ADDR_Q_B_DATA_1)
+            int_q_b[63:32] <= (WDATA[31:0] & wmask) | (int_q_b[63:32] & ~wmask);
     end
 end
 

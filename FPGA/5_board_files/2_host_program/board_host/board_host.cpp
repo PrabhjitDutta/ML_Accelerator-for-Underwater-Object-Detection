@@ -25,6 +25,11 @@
 //   Y26_PACK_SCHED=dynamic    pack X's OpenMP schedule (default static).
 //   Y26_COHERENT=1            only with a bitstream that puts X/Y on coherent HPC ports: skip their cache syncs.
 //   YOLO26_HEADS_ONLY=1       write only the 3 o2o head maps.
+// -DY26_YC builds (direct codes, frame loop only; they pair with a bitstream built with -DY26_YC):
+//   Y26_YC=0                  every conv in float mode (the kernel's codes go to a scrap block).
+//   Y26_YC_CHECK=1            compare every direct code with the host quantizer of the kernel's float output.
+//   Y26_YC_HOLE=<phys addr>   board: point the output nobody reads at this address instead of DDR. It must be an
+//                             address the interconnect does not map, so the write ends in its decode-error slave.
 // Load the bitstream with pynq Overlay('y26_zcu102.bit') or fpgautil (the .hwh beside it); PL0 must read
 // ~249975000 Hz. The exit summary splits every conv into pack / in / kernel / out plus PS time between convs.
 #include "../hls_kernel/conv_engine.h"
@@ -146,7 +151,9 @@ struct Stats {
 } g_stats;
 
 // Byte offsets of the seven kernel buffers in one image.
-struct Layout { size_t x, wt, wsc, bias, stp, lo, y, end; int yq = 0; size_t qs = 0, qlo = 0, qst = 0; };
+// yc: the code output (-DY26_YC). ynone / ycnone: nobody reads that output.
+struct Layout { size_t x, wt, wsc, bias, stp, lo, y, end; int yq = 0; size_t qs = 0, qlo = 0, qst = 0;
+                size_t yc = 0; bool ynone = false, ycnone = false; };
 
 void run_cmodel(uint8_t* b, const Layout& L, const ConvW& c, int H, int W) {
     y26_conv_top(reinterpret_cast<const y26_xw_t*>(b + L.x), reinterpret_cast<const y26_ww_t*>(b + L.wt),
@@ -158,6 +165,10 @@ void run_cmodel(uint8_t* b, const Layout& L, const ConvW& c, int H, int W) {
 #ifdef Y26_YQ8
                  , L.yq, reinterpret_cast<const float*>(b + L.qs), reinterpret_cast<const float*>(b + L.qlo),
                  reinterpret_cast<const float*>(b + L.qst)
+#endif
+#ifdef Y26_YC
+                 , reinterpret_cast<y26_cw_t*>(b + L.yc), L.yq, reinterpret_cast<const float*>(b + L.qs),
+                 reinterpret_cast<const float*>(b + L.qlo)
 #endif
                  );
 }
@@ -178,6 +189,7 @@ struct Buf {
     }
     std::mutex km;                                 // one kernel
     static constexpr bool coh = false;
+    static constexpr uint64_t hole = 0;
     void to_dev(size_t, size_t) {}
     void for_write(size_t, size_t) {}
     void from_dev(size_t, size_t) {}
@@ -232,7 +244,9 @@ struct Buf {
     int fo = -1, fs = -1, fdr = -1, fdev = -1, fcpu = -1;   // sync_offset/_size/_direction/_for_device/_for_cpu
     bool cmd = false;                // Y26_SYNC_CMD=1: one packed write per sync
     bool coh = false;                // Y26_COHERENT=1 (cached buffer only): X/Y ride the coherent HPC ports, no sync
+    uint64_t hole = 0;               // Y26_YC_HOLE: where an output nobody reads is pointed (0 = into the buffer)
     Buf() {
+        if (const char* h = std::getenv("Y26_YC_HOLE")) hole = std::strtoull(h, nullptr, 0);
         // Y26_UDMABUF=<name>: a cached DMA buffer. The HP ports are not cache-coherent, so every run is bracketed by
         // cache maintenance (sync()). Default: Y26_BUF_PHYS/Y26_BUF_SIZE through uncached O_SYNC /dev/mem.
         const char* u = std::getenv("Y26_UDMABUF");
@@ -342,7 +356,7 @@ struct Buf {
         std::lock_guard<std::mutex> g(km);
         if (!(reg[0] & 4)) throw std::runtime_error("kernel not idle before " + c.name);
         w64(0x10, phys + L.x);    w64(0x1c, phys + L.wt);   w64(0x28, phys + L.wsc); w64(0x34, phys + L.bias);
-        w64(0x40, phys + L.stp);  w64(0x4c, phys + L.lo);   w64(0x58, phys + L.y);
+        w64(0x40, phys + L.stp);  w64(0x4c, phys + L.lo);   w64(0x58, L.ynone && hole ? hole : phys + L.y);
         w32(0x64, H);          w32(0x6c, W);          w32(0x74, c.oc);      w32(0x7c, c.ic);
         w32(0x84, c.kh);       w32(0x8c, c.kw);       w32(0x94, c.sh);      w32(0x9c, c.sw);
         w32(0xa4, c.ph);       w32(0xac, c.pw);       w32(0xb4, c.groups);  w32(0xbc, c.act);
@@ -353,6 +367,13 @@ struct Buf {
         // yq is written on every run: registers persist, and a float conv after a coded one must not inherit yq=1.
         w32(Y26_REG_YQ, (uint32_t)L.yq);
         w64(Y26_REG_QS, phys + L.qs);  w64(Y26_REG_QLO, phys + L.qlo);  w64(Y26_REG_QST, phys + L.qst);
+#endif
+#ifdef Y26_YC
+        // Offsets of the Yc/yq/q_k/q_b registers, from the direct-codes build's driver header (xy26_conv_top_hw.h).
+        enum { Y26_REG_YC = 0xdc, Y26_REG_YQ = 0xe8, Y26_REG_QK = 0xf0, Y26_REG_QB = 0xfc };
+        w64(Y26_REG_YC, L.ycnone && hole ? hole : phys + L.yc);
+        w32(Y26_REG_YQ, (uint32_t)L.yq);           // every run: registers persist
+        w64(Y26_REG_QK, phys + L.qs);  w64(Y26_REG_QB, phys + L.qlo);
 #endif
         barrier();
         static std::unordered_map<const ConvW*, double> seen;   // this conv's kernel ms last frame (under km)
@@ -428,7 +449,10 @@ std::mutex g_wmu;
 // them into X instead of quantizing. Edges are read off yolo26_network.cpp; a coded tensor reaching any other
 // consumer throws (y26_take_codes). Enabled by y26_board_weights() (frame loop) AND Y26_YQ=1.
 const Weights* g_W = nullptr;
-struct Codes { const ConvW* cons; int off; };
+// -DY26_YC (direct codes) uses the same table, restricted to a consumer whose only input is the producer: the kernel
+// writes the codes into a block that becomes the consumer's X as it is (Codes::xr), and no host pass touches them.
+struct Codes { const ConvW* cons; int off; std::shared_ptr<Region> xr; };
+long g_yc_n = 0, g_yc_diff = 0, g_yc_far = 0;      // Y26_YC_CHECK totals this frame (under g_cmu)
 int g_fuse_checked = 0;                             // fused sources verified by Y26_FUSE_CHECK (exit summary)
 int g_ahead_checked = 0;                            // prepacked / sibling-shared / uint8-table sources verified
 std::unordered_map<const float*, Codes> g_codes;   // coded tensor storage -> its one consumer
@@ -468,15 +492,23 @@ const ConvW* yq_edge(const ConvW& c, int& off) {
     if (!(q.quant && q.asym)) return nullptr;                       // consumer runs on the CPU in float
     off = it->second.second ? q.ic - c.oc : 0;
     if (off < 0 || off + c.oc > q.ic) throw std::runtime_error("YQ edge " + c.name + " -> " + q.name + ": channels");
+#ifdef Y26_YC
+    if (q.ic != c.oc) return nullptr;                               // X has other sources too: the host packs it
+    for (int o = 0; o < c.oc; ++o) {                                // y26_qc's operand ranges (conv_engine.h)
+        const float k = q.ssc[o] / q.step_of(o), b = q.lo_of(o) / q.step_of(o);
+        if (!(k >= 1.f && k < 65536.f && b >= -256.f && b <= 0.f)) return nullptr;
+    }
+#endif
     return &q;
 }
 // The consumer side: true when t arrived as codes for (c, channel ch0) - claimed, so it is used once.
-bool y26_take_codes(const Tensor* t, const ConvW& c, int ch0) {
+bool y26_take_codes(const Tensor* t, const ConvW& c, int ch0, std::shared_ptr<Region>* xr = nullptr) {
     std::lock_guard<std::mutex> g(g_cmu);
     const auto it = g_codes.find(t->d.data());
     if (it == g_codes.end()) return false;
-    if (it->second.cons != &c || it->second.off != ch0)
+    if (it->second.cons != &c || it->second.off != ch0 || (it->second.xr && !xr))
         throw std::runtime_error("YQ: a coded tensor for " + it->second.cons->name + " reached " + c.name);
+    if (xr) *xr = std::move(it->second.xr);
     g_codes.erase(it);
     return true;
 }
@@ -513,11 +545,29 @@ const WSlot& weights_slot(Buf& B, const ConvW& c) {
         float* qs = reinterpret_cast<float*>(B.host + s.qs);
         float* ql = reinterpret_cast<float*>(B.host + s.qlo);
         float* qt = reinterpret_cast<float*>(B.host + s.qst);
+#ifdef Y26_YC
+        (void)qt;                                   // y26_qc: k = ssc/step, b = lo/step
+        for (int o = 0; o < c.oc; ++o) { qs[o] = q->ssc[o] / q->step_of(o); ql[o] = q->lo_of(o) / q->step_of(o); }
+#else
         for (int o = 0; o < c.oc; ++o) { qs[o] = q->ssc[qoff + o]; ql[o] = q->lo_of(qoff + o); qt[o] = 1.f / q->step_of(qoff + o); }
+#endif
     }
     B.to_dev(s.wt, end - s.wt);
     return g_wslots.emplace(&c, s).first->second;
 }
+#ifdef Y26_YC
+// Where the kernel's codes go when no conv reads them: one permanent block, never synced, never read.
+size_t code_scrap(size_t n) {
+    static const size_t cap = (size_t)4 << 20;     // 640x640 frames: the largest conv writes 1.6 MB of codes
+    static const size_t off = [] {
+        const size_t o = arena().take(cap, true);
+        if (o == SIZE_MAX) throw std::runtime_error("no room for the code scrap block - enlarge the DMA buffer");
+        return o;
+    }();
+    if (n > cap) throw std::runtime_error("a conv writes more codes than the scrap block holds");
+    return off;
+}
+#endif
 }  // namespace
 
 // Fused sources (Src in layer_ops.h) straight to this conv's codes; each equals quant_plane() of the
@@ -687,17 +737,19 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     struct Plane { const Src* s; int k; };         // channel k of source s; s == nullptr: arrived as codes (yq)
     std::vector<Plane> src;                        // one plane per input channel: the concat, never built
     std::vector<std::pair<int, const Tensor*>> coded;   // (first channel, source) that arrived as codes
+    std::shared_ptr<Region> cx;                    // direct codes: the kernel already wrote this conv's whole X here
     bool pre_found = false;
     for (const Src& t : xs) {
         CSIM_HOST_ASSERT(t.H() == H && t.W() == W, "conv " + c.name + ": concat inputs differ in H,W");
         const bool p = pre && t.op == Src::PLAIN && t.a->d.data() == pre->d && (int)src.size() == pre->ch0 && t.C() == pre->C;
         pre_found |= p;
-        const bool q = !p && t.op == Src::PLAIN && y26_take_codes(t.a, c, (int)src.size());
+        const bool q = !p && t.op == Src::PLAIN && y26_take_codes(t.a, c, (int)src.size(), &cx);
         if (q) coded.push_back({(int)src.size(), t.a});
         for (int k = 0; k < t.C(); ++k) src.push_back({p || q ? nullptr : &t, k});
     }
     CSIM_HOST_ASSERT((int)src.size() == c.ic, "conv " + c.name + ": input C mismatch");
     CSIM_HOST_ASSERT(!pre || (pre->c == &c && pre_found), "conv " + c.name + ": prepacked source not among its inputs");
+    CSIM_HOST_ASSERT(!cx || xs.size() == 1, "conv " + c.name + ": direct codes need a single source");
     const auto t0 = clk::now();
     Buf& B = buf();
     const int OH = (H + 2 * c.ph - c.kh) / c.sh + 1, OW = (W + 2 * c.pw - c.kw) / c.sw + 1;
@@ -741,14 +793,27 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     const int KH = i2c ? OH : H, KW = i2c ? OW : W;
     const size_t nxk = i2c ? (size_t)kc.ic * OH * OW : nx;
     std::vector<uint8_t> q3(i2c ? nx : 0);         // Img2Col: the ic code planes, gathered into X below
-    Region xr(pre || sx ? 0 : al(nxk), c.name), yr(direct ? 0 : ny, c.name);
+    Region xr(pre || sx || cx ? 0 : al(nxk), c.name), yr(direct ? 0 : ny, c.name);
     Layout L;
-    L.x = pre ? pre->xr->off : sx ? sx->xr->off : xr.off;
+    L.x = pre ? pre->xr->off : sx ? sx->xr->off : cx ? cx->off : xr.off;
     L.wt = ws.wt;  L.wsc = ws.wsc;  L.bias = ws.bias;  L.stp = ws.stp;  L.lo = ws.lo;
     L.y = direct ? (size_t)(yp - B.host) : yr.off;
     L.end = L.y + ny;
     int qoff = 0;
     const ConvW* cons = yq_edge(c, qoff);
+#ifdef Y26_YC
+    // The kernel's code groups are the consumer's X bytes only when rows are whole groups; whole cache lines per
+    // plane keep the host's cache maintenance of a neighbour off these bytes.
+    if (cons && (OW % Y26_EPI_WIDE || ((size_t)OH * OW) % 64)) cons = nullptr;
+    const size_t ncode = (size_t)c.oc * OH * YS;
+    std::shared_ptr<Region> cxr;                   // the consumer's X
+    if (cons) cxr = std::make_shared<Region>(al(ncode), cons->name);
+    L.yc = cons ? cxr->off : code_scrap(ncode);
+    L.ynone = cons != nullptr;  L.ycnone = !cons;
+    const bool dc = cons != nullptr;
+#else
+    const bool dc = false;
+#endif
     L.yq = cons ? 1 : 0;  L.qs = ws.qs;  L.qlo = ws.qlo;  L.qst = ws.qst;
 
     uint8_t* const XK = B.host + L.x;              // tb: pX (uint8 codes); Y26_XPE-packing is LE bytes
@@ -818,6 +883,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
             ch0 += t.C();
         }
     }
+    if (!cx)
     for (const auto& e : coded)                    // already this conv's codes (yq), channel-major
         std::memcpy(X + (size_t)e.first * HW, e.second->d.data(), (size_t)e.second->C * HW);
     if (i2c) {                                     // XK[(ic*kh+ky)*kw+kx][oy][ox] = X[ic][oy*sh+ky-ph][ox*sw+kx-pw], else 0
@@ -838,15 +904,20 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
                     }
                 }
     }
-    if (!reuse) std::memset(XK + nxk, 0, al(nxk) - nxk);   // only the port-word tail needs zeros
+    if (!reuse && !cx) std::memset(XK + nxk, 0, al(nxk) - nxk);   // only the port-word tail needs zeros
     const auto t2 = clk::now();
     // Cached buffer: X (and the weights, at first use) are cleaned before the kernel reads them; Y's range is
     // cleaned before the kernel writes it, so no dirty line can later be evicted over Y. A reused sibling X was
     // cleaned by its packer.
+    // Direct codes: the kernel wrote X, so there is nothing to clean; and of this conv's outputs only the codes are
+    // kept, so only their block is cleaned.
     if (!B.coh) {                                  // coherent X/Y: the CCI snoops, nothing to maintain
-        if (!reuse) B.to_dev(L.x, al(nxk));
-        B.for_write(L.y, ny);
+        if (!reuse && !cx) B.to_dev(L.x, al(nxk));
+        if (!dc) B.for_write(L.y, ny);
     }
+#ifdef Y26_YC
+    if (dc) B.for_write(L.yc, ncode);
+#endif
     if (sx && !reuse) ready.ok();
     const auto t3 = clk::now();
 
@@ -855,13 +926,14 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
     static const char* sel = std::getenv("Y26_BOARD_CHECK");
     std::vector<uint64_t> ref;
     if (sel && *sel && c.name.find(sel) != std::string::npos) {   // inputs + every weight slot, before the run
+        if (cx) B.from_dev(L.x, nxk);              // X came from the kernel: make the host see it
         ref.assign(B.size / 8, 0);                 // CHECK forces serial (y26_async), so the image is stable
         std::memcpy(ref.data(), B.host, B.size);
     }
 #endif
     const double kern = B.run(L, kc, KH, KW);
     const auto t4 = clk::now();
-    if (!B.coh) B.from_dev(L.y, ny);
+    if (!B.coh && !dc) B.from_dev(L.y, ny);
     const auto t4b = clk::now();
 
     const float* Yf = reinterpret_cast<const float*>(B.host + L.y);
@@ -871,14 +943,46 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
         run_cmodel(rb, L, kc, KH, KW);
         const float* g = reinterpret_cast<const float*>(rb + L.y);
         check = 0;
-        for (int o = 0; o < c.oc; ++o)
+        const bool yvoid = dc && B.hole;           // the float output went nowhere
+        if (dc && !yvoid) B.from_dev(L.y, ny);
+        for (int o = 0; o < c.oc && !yvoid; ++o)
             for (int r = 0; r < OH; ++r) {
                 const size_t i = ((size_t)o * OH + r) * YS;
                 check += std::memcmp(Yf + i, g + i, (size_t)OW * 4) != 0;   // rows that differ
             }
+#ifdef Y26_YC
+        if (dc) {                                  // and the codes, plane by plane
+            B.from_dev(L.yc, ncode);
+            for (int o = 0; o < c.oc; ++o)
+                check += std::memcmp(B.host + L.yc + (size_t)o * OH * OW, rb + L.yc + (size_t)o * OH * OW, (size_t)OH * OW) != 0;
+        }
+#endif
+    }
+#endif
+#ifdef Y26_YC
+    static const bool yc_check = [] { const char* e = std::getenv("Y26_YC_CHECK"); return e && *e == '1'; }();
+    if (dc && yc_check && !B.hole) {               // each code against quant_plane of the kernel's own float
+        B.from_dev(L.y, ny);  B.from_dev(L.yc, ncode);
+        const size_t OHW = (size_t)OH * OW;        // YS == OW here
+        std::vector<uint8_t> q(OHW);
+        long nd = 0, nf = 0;
+        for (int o = 0; o < c.oc; ++o) {
+            quant_plane(q.data(), Yf + (size_t)o * OHW, OHW, cons->ssc[o], cons->lo_of(o), cons->step_of(o));
+            const uint8_t* k = B.host + L.yc + (size_t)o * OHW;
+            for (size_t i = 0; i < OHW; ++i) { nd += q[i] != k[i]; nf += q[i] > k[i] + 1 || k[i] > q[i] + 1; }
+        }
+        std::lock_guard<std::mutex> g(g_cmu);
+        g_yc_n += (long)(c.oc * OHW);  g_yc_diff += nd;  g_yc_far += nf;
     }
 #endif
     const auto t5 = clk::now();
+#ifdef Y26_YC
+    if (dc) {                                      // the output tensor only names the block: its floats are not valid
+        std::lock_guard<std::mutex> g(g_cmu);
+        g_codes[y.d.data()] = {cons, qoff, cxr};
+        ++g_ncoded;
+    } else
+#endif
     if (cons) {
         // Code slots -> the consumer's X-plane bytes, in the output tensor's own storage. In place when direct
         // (byte i is written after slot i is read, and every later slot sits at byte >= 4i).
@@ -890,7 +994,7 @@ Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre
             y26_yq_plane(d + row * OW, s + row * YS, OW, qs, ql, qt);
         }
         std::lock_guard<std::mutex> g(g_cmu);
-        g_codes[y.d.data()] = {cons, qoff};
+        g_codes[y.d.data()] = {cons, qoff, nullptr};
         ++g_ncoded;
     } else if (!direct)                            // scratch Y: unpack the padded rows
     for (int o = 0; o < c.oc; ++o)
@@ -953,6 +1057,11 @@ void y26_tensor_free(void* p, size_t bytes) {
     else ::operator delete(p);
 }
 void y26_board_weights(const Weights& W) {
+#ifdef Y26_YC
+    const char* off = std::getenv("Y26_YC");
+    if (!(off && std::strcmp(off, "0") == 0)) g_W = &W;
+    return;
+#endif
     const char* e = std::getenv("Y26_YQ");
     if (!(e && std::strcmp(e, "1") == 0)) return;
 #ifdef Y26_YQ8
@@ -965,11 +1074,17 @@ void y26_board_weights(const Weights& W) {
 void y26_frame_end(int frame) {
     {
         std::lock_guard<std::mutex> g(g_cmu);
-        if (!g_codes.empty())                      // a coded tensor nobody consumed: the edge table is wrong
+        // Overlapped frames: another frame's tensor may be pending here.
+        static const char* ie = std::getenv("Y26_INFLIGHT");
+        static const bool ovl = ie && std::atoi(ie) > 1;
+        if (!g_codes.empty() && !ovl)                      // a coded tensor nobody consumed: the edge table is wrong
             throw std::runtime_error("YQ: " + std::to_string(g_codes.size()) + " coded tensors unconsumed at frame end (first for " +
                                      g_codes.begin()->second.cons->name + ")");
         if (g_W) std::printf("[board] frame %d: %d code-mode edges\n", frame, g_ncoded);
         g_ncoded = 0;
+        if (g_yc_n) std::printf("[board] frame %d: Y26_YC_CHECK %ld direct codes, %ld differ from the host quantizer, %ld by more than 1\n",
+                                frame, g_yc_n, g_yc_diff, g_yc_far);
+        g_yc_n = g_yc_diff = g_yc_far = 0;
     }
     {
         std::lock_guard<std::mutex> g(g_sxm);      // a sibling that never came (a skipped branch): free its X

@@ -1,4 +1,0 @@
-all:
-{
-    yolo26s_zcu102_attn.bit
-}

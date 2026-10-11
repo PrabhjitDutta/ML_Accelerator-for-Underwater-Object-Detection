@@ -16,7 +16,7 @@ case "$(uname -s)" in MINGW*|MSYS*) export PATH="/c/msys64/ucrt64/bin:$PATH";; e
 
 # The shipping kernel flags (FPGA/1_hls_synthesis/hls_build_flags.txt): they set the arithmetic and the port
 # layout, so a host built with anything else does not match the bitstream.
-SHIP="-DY26_A1 -DY26_ACT_LATENCY=100 -DY26_ACT_MAX_ELEMS=4194304UL -DY26_ACT_NRO=128 -DY26_ACT_WORD=64 -DY26_DWP=16 -DY26_EPI_WIDE=8 -DY26_FX_DEQUANT -DY26_LANES=512 -DY26_OCPACK -DY26_OCPACK_P=16 -DY26_OUT_LATENCY=8 -DY26_OUT_WORD=256 -DY26_PREFETCH -DY26_ROWS=24 -DY26_SILU_LUT -DY26_SPLIT_OUT -DY26_WT_LATENCY=8 -DY26_WT_TAPMAJOR -DY26_WT_WORD=64 -DY26_XB64 -DY26_XBUF_WIDE=8 -DY26_YSTRIDE_PAD -DY26_YDIRECT -UY26_ACT_WORD -DY26_ACT_WORD=128 -UY26_XBUF_WIDE -DY26_XBUF_WIDE=16"
+SHIP="-DY26_A1 -DY26_ACT_LATENCY=100 -DY26_ACT_MAX_ELEMS=4194304UL -DY26_ACT_NRO=128 -DY26_ACT_WORD=64 -DY26_DWP=16 -DY26_EPI_WIDE=8 -DY26_FX_DEQUANT -DY26_LANES=512 -DY26_OCPACK -DY26_OCPACK_P=16 -DY26_OUT_LATENCY=8 -DY26_OUT_WORD=256 -DY26_PREFETCH -DY26_ROWS=24 -DY26_SILU_LUT -DY26_SPLIT_OUT -DY26_WT_LATENCY=8 -DY26_WT_TAPMAJOR -DY26_WT_WORD=64 -DY26_XB64 -DY26_XBUF_WIDE=8 -DY26_YSTRIDE_PAD -DY26_YDIRECT -UY26_ACT_WORD -DY26_ACT_WORD=128 -UY26_XBUF_WIDE -DY26_XBUF_WIDE=16 -DY26_YC"
 FLAGS="$M/../FPGA/1_hls_synthesis/hls_build_flags.txt"
 if [ -f "$FLAGS" ] && [ "$(grep -v '^#' "$FLAGS" | tr -d '\r' | tr '\n' ' ' | sed 's/ $//')" != "-std=c++14 $SHIP" ]; then
     echo "[host] REFUSING: SHIP flags differ from $FLAGS - a host must match its bitstream" >&2; exit 2
@@ -38,8 +38,8 @@ esac
 # vectorizes as on the A53 (same IEEE results).
 # -ftree-vectorize: GCC before 12 does not vectorize at -O2, and the host has no hand-written NEON.
 case "$("$CXX" -dumpmachine)" in aarch64*) ARCH="-mcpu=cortex-a53";; x86_64*) ARCH="-msse4.1 -fno-trapping-math";; *) ARCH="";; esac
-# Y26_YQ8=1: code-mode host (-DY26_YQ8); pairs only with a bitstream built with -DY26_YQ8.
-[ "${Y26_YQ8:-0}" = 1 ] && { SHIP="$SHIP -DY26_YQ8"; OUT="${OUT}_yq8"; }
+# Y26_YQ8=1: code-mode host (-DY26_YQ8 instead of -DY26_YC); pairs only with a bitstream built with -DY26_YQ8.
+[ "${Y26_YQ8:-0}" = 1 ] && { SHIP="${SHIP/ -DY26_YC/} -DY26_YQ8"; OUT="${OUT}_yq8"; }
 # Integer attention (-DY26_ATTN_INT) is the default: on the board the bitstream's attention block computes it.
 # Y26_ATTN=0: float attention on the CPU instead (binary suffix _cpuattn); its output maps differ slightly.
 if [ "${Y26_ATTN:-1}" = 1 ]; then EXTRA="$EXTRA -DY26_ATTN_INT"; else OUT="${OUT}_cpuattn"; fi

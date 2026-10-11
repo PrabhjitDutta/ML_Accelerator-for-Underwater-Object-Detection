@@ -74,6 +74,14 @@ if {$coh} {
     foreach k {ACT_CACHE ACT_PROT OUT_CACHE OUT_PROT} { puts "### coh: $k = [get_property CONFIG.C_M_AXI_GMEM_${k}_VALUE [get_bd_cells y26_conv_top_0]]" }
 }
 
+# Direct-codes kernel (-DY26_YC): its code port takes the free HPC1 port, 64-bit, not coherent.
+set yc [expr {[get_bd_intf_pins -quiet y26_conv_top_0/m_axi_gmem_code] ne ""}]
+puts "### direct-codes port: $yc"
+if {$yc} {
+    if {$coh} { puts "### !!! coh already uses HPC1" ; exit 1 }
+    set_property -dict [list CONFIG.PSU__USE__S_AXI_GP1 {1} CONFIG.PSU__SAXIGP1__DATA_WIDTH {64}] $ps
+}
+
 if {$attn} {
     create_bd_cell -type ip -vlnv xilinx.com:hls:y26_attn_top:1.0 y26_attn_top_0
     set_property -dict [list CONFIG.C_M_AXI_GMEM_ATTN_CACHE_VALUE {"1111"} CONFIG.C_M_AXI_GMEM_ATTN_PROT_VALUE {"010"}]       [get_bd_cells y26_attn_top_0]
@@ -93,6 +101,7 @@ auto "PS M_AXI_HPM0_LPD -> kernel s_axi_control" \
 
 set ports {m_axi_gmem_act S_AXI_HP0_FPD m_axi_gmem_wt S_AXI_HP1_FPD m_axi_gmem_out S_AXI_HP2_FPD m_axi_gmem_scale S_AXI_HP3_FPD}
 if {$coh} { set ports {m_axi_gmem_act S_AXI_HPC0_FPD m_axi_gmem_wt S_AXI_HP1_FPD m_axi_gmem_out S_AXI_HPC1_FPD m_axi_gmem_scale S_AXI_HP3_FPD} }
+if {$yc} { lappend ports m_axi_gmem_code S_AXI_HPC1_FPD }
 foreach {m hp} $ports {
     auto "kernel $m -> PS $hp" \
       -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
