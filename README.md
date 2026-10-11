@@ -38,7 +38,7 @@ Each folder has its own `README.md` with the details.
 | On the board, whole program | **191.7 ms per image, 5.22 images per second** (20 test images, one at a time); **8.4 images per second** with four images overlapped. This includes the ARM processor's share of the work. |
 | Chip resources used | 32% of logic (LUTs), 27% of block RAM, 43% of DSP blocks |
 | Correctness | On the board, the FPGA matches the C++ reference exactly on all 100 convolution layers and on both attention layers. |
-| Accuracy | mAP50 0.755 on the 800 URPC2018 validation images, from the board program run on a PC; on the board it gives the same detections on the 20 test images. |
+| Accuracy | mAP50 0.755 on the 800 URPC2018 validation images, measured on the board. |
 
 **Status:** the design runs on the ZCU102. The FPGA computes every convolution and the core of the two attention
 layers; the ARM processor does the rest. Where one convolution feeds the next directly, the FPGA writes its
