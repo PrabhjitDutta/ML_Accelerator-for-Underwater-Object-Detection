@@ -106,6 +106,8 @@ struct Src {
     int H() const { return op == UP2X ? 2 * a->H : a->H; }
     int W() const { return op == UP2X ? 2 * a->W : a->W; }
 };
+// The frame this thread works on (frame loop; a forked branch inherits it).
+inline int& y26_frame() { thread_local int f = 0; return f; }
 // Board: one PLAIN source's X codes, packed ahead of its conv (on its own thread when async). Null off the board.
 struct Y26Pre;
 using Pre = std::shared_ptr<Y26Pre>;
@@ -114,9 +116,16 @@ using Pre = std::shared_ptr<Y26Pre>;
 Tensor y26_board_conv(const std::vector<Src>& xs, const ConvW& c, const Pre& pre = nullptr);
 // t = c's FIRST (last = false) or LAST input source. t's storage must outlive the conv; t itself may be moved.
 Pre y26_board_prepack(const Tensor* t, const ConvW& c, bool last);
+// y = x's channels from c0 on. True when x is held as kernel codes only, so y names them and there is nothing to copy.
+bool y26_board_slice(const Tensor& x, Tensor& y, int c0);
+// y = a + b. True when the sum was made on kernel codes, so y names them and has no floats.
+bool y26_board_add(const Tensor& a, const Tensor& b, Tensor& y);
 #ifdef Y26_ATTN_INT
 // board_host.cpp: y26_attn_int_head for NH heads on the attention block. q, k: [NH][N][KD]; v, J: [NH][N][VD].
 void y26_board_attn(const int8_t* q, const int8_t* k, const int8_t* v, int32_t* J, int NH, int N, int KD, int VD, AttnInt c);
+// board_host.cpp: the whole Attention module on the v2 block (qkv on the kernel, the block, proj on the kernel).
+// False: not enabled, the caller computes it.
+bool y26_board_attn2(const Tensor& x, const ConvW& qkv, const ConvW& proj, const ConvW& pe, const AttnFQ& fq, Tensor& out);
 #endif
 // The frame loop's input as uint8 k (float k/255.f): 0.conv packs it through a 256-entry table. u8 = null forgets d.
 void y26_input_u8(const float* d, std::shared_ptr<const std::vector<uint8_t>> u8);
@@ -347,6 +356,9 @@ inline Tensor add(const Tensor& a, const Tensor& b) {
                      std::to_string(a.W) + " vs " + std::to_string(b.C) + "x" + std::to_string(b.H) +
                      "x" + std::to_string(b.W));
     Tensor y(a.C, a.H, a.W, NoInit());
+#ifdef Y26_BOARD
+    if (y26_board_add(a, b, y)) return y;
+#endif
     for (size_t i = 0; i < a.d.size(); ++i) y.d[i] = a.d[i] + b.d[i];
     return y;
 }
@@ -357,6 +369,9 @@ inline Tensor slice_ch(const Tensor& x, int c0, int n) {
     CSIM_HOST_ASSERT(c0 >= 0 && n >= 0 && c0 + n <= x.C, "slice_ch: [" + std::to_string(c0) + "," +
                      std::to_string(c0 + n) + ") out of range for C=" + std::to_string(x.C));
     Tensor y(n, x.H, x.W, NoInit());
+#ifdef Y26_BOARD
+    if (y26_board_slice(x, y, c0)) return y;
+#endif
     std::copy(x.d.begin() + (size_t)c0 * x.H * x.W,
               x.d.begin() + (size_t)(c0 + n) * x.H * x.W, y.d.begin());
     return y;
@@ -428,6 +443,9 @@ inline Tensor attention(const Tensor& x, const ConvW& qkv, const ConvW& proj, co
     CSIM_HOST_ASSERT(qkv.oc == num_heads * per_head, "attention: qkv oc=" + std::to_string(qkv.oc) +
                      " but num_heads*per_head=" + std::to_string(num_heads * per_head));
 
+#if defined(Y26_ATTN_INT) && defined(Y26_BOARD)
+    { Tensor r;  if (y26_board_attn2(x, qkv, proj, pe, fq, r)) return r; }
+#endif
     Tensor q = conv2d(x, qkv);                     // [nh*per_head, H, W]
 #ifdef Y26_ATTN_INT
     // Integer form on the quantizers' codes (attention_int.h): q, k, v_mm must be zero-centred, sm must start at 0.

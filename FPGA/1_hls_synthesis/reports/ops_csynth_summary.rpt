@@ -1,0 +1,990 @@
+
+
+================================================================
+== Synthesis Summary Report of 'y26_ops_top'
+================================================================
++ General Information: 
+    * Date:           Tue Oct 13 02:52:31 2026
+    * Version:        2026.1 (Build 6493734 on Jun 16 2026)
+    * Project:        prj_y26_ops_top
+    * Solution:       sol (Vivado IP Flow Target)
+    * Product family: zynquplus
+    * Target device:  xczu9eg-ffvb1156-2-e
+    
+
+* Performance & Resource Estimates: 
++----------------------------------------------------------+------+---------------+----------+---------+------+----------+---------+-----------+------+---------+----------+------------+------------+-----+
+|                          Modules                         | Issue|               | Iteration|         | Trip |          |       Latency       |      |         |          |            |            |     |
+|                          & Loops                         | Type | Violation Type|  Latency | Interval| Count| Pipelined| (cycles)|    (ns)   | Slack|  BRAM   |    DSP   |     FF     |     LUT    | URAM|
++----------------------------------------------------------+------+---------------+----------+---------+------+----------+---------+-----------+------+---------+----------+------------+------------+-----+
+|+ y26_ops_top                                             |     -|              -|         -|    11036|     -|        no|    11035|  4.414e+04|  0.00|  68 (3%)|  25 (~0%)|  12746 (2%)|  12051 (4%)|    -|
+| + y26_ops_top_Pipeline_PAR                               |     -|              -|         -|      131|     -|       yes|      131|    524.000|  0.00|        -|         -|   155 (~0%)|   126 (~0%)|    -|
+|  o PAR                                                   |     -|              -|         3|        1|   128|       yes|      129|    516.000|  2.92|        -|         -|           -|           -|    -|
+| + p_anonymous_namespace_ops_run*                         |     -|              -|         -|    10883|     -|  dataflow|    10892|  4.357e+04|  0.00|  40 (2%)|  19 (~0%)|   9130 (1%)|   8634 (3%)|    -|
+|  + p_anonymous_namespace_ops_read                        |     -|              -|         -|     1613|     -|        no|     1613|  6.452e+03|  0.00|        -|         -|   301 (~0%)|   431 (~0%)|    -|
+|   + p_anonymous_namespace_ops_read_Pipeline_READ         |     -|              -|         -|     1603|     -|       yes|     1603|  6.412e+03|  0.00|        -|         -|   164 (~0%)|   135 (~0%)|    -|
+|    o READ                                                |     -|              -|         3|        1|  1600|       yes|     1601|  6.404e+03|  2.92|        -|         -|           -|           -|    -|
+|  + p_anonymous_namespace_ops_read_2                      |     -|              -|         -|     1613|     -|        no|     1613|  6.452e+03|  0.00|        -|         -|   301 (~0%)|   431 (~0%)|    -|
+|   + p_anonymous_namespace_ops_read_2_Pipeline_READ       |     -|              -|         -|     1603|     -|       yes|     1603|  6.412e+03|  0.00|        -|         -|   164 (~0%)|   135 (~0%)|    -|
+|    o READ                                                |     -|              -|         3|        1|  1600|       yes|     1601|  6.404e+03|  2.92|        -|         -|           -|           -|    -|
+|  + p_anonymous_namespace_ops_layout_1                    |     -|              -|         -|    10882|     -|        no|    10882|  4.353e+04|  0.00|        -|         -|  3620 (~0%)|   5103 (1%)|    -|
+|   + p_anonymous_namespace_ops_layout_1_Pipeline_PASS     |     -|              -|         -|     1602|     -|       yes|     1602|  6.408e+03|  0.00|        -|         -|    34 (~0%)|   137 (~0%)|    -|
+|    o PASS                                                |     -|              -|         2|        1|  1600|       yes|     1600|  6.400e+03|  2.92|        -|         -|           -|           -|    -|
+|   o UNIT                                                 |     -|              -|        34|        -|   320|        no|    10880|  4.352e+04|  2.92|        -|         -|           -|           -|    -|
+|    + p_anonymous_namespace_ops_layout_1_Pipeline_GATHER  |     -|              -|         -|        8|     -|       yes|        8|     32.000|  1.03|        -|         -|   774 (~0%)|    78 (~0%)|    -|
+|     o GATHER                                             |     -|              -|         2|        1|     6|       yes|        6|     24.000|  2.92|        -|         -|           -|           -|    -|
+|    + p_anonymous_namespace_ops_layout_1_Pipeline_EMIT    |     -|              -|         -|       22|     -|       yes|       22|     88.000|  1.28|        -|         -|   136 (~0%)|   174 (~0%)|    -|
+|     o EMIT                                               |     -|              -|         2|        1|    20|       yes|       20|     80.000|  2.92|        -|         -|           -|           -|    -|
+|  + p_anonymous_namespace_ops_layout                      |     -|              -|         -|     6401|     -|        no|     6401|  2.560e+04|  0.00|        -|         -|  2425 (~0%)|   509 (~0%)|    -|
+|   + p_anonymous_namespace_ops_layout_Pipeline_PASS       |     -|              -|         -|     1602|     -|       yes|     1602|  6.408e+03|  0.00|        -|         -|    34 (~0%)|   137 (~0%)|    -|
+|    o PASS                                                |     -|              -|         2|        1|  1600|       yes|     1600|  6.400e+03|  2.92|        -|         -|           -|           -|    -|
+|   o UNIT                                                 |     -|              -|        20|        -|   320|        no|     6400|  2.560e+04|  2.92|        -|         -|           -|           -|    -|
+|    + p_anonymous_namespace_ops_layout_Pipeline_GATHER    |     -|              -|         -|        9|     -|       yes|        9|     36.000|  1.03|        -|         -|   776 (~0%)|    71 (~0%)|    -|
+|     o GATHER                                             |     -|              -|         2|        1|     6|       yes|        7|     28.000|  2.92|        -|         -|           -|           -|    -|
+|    + p_anonymous_namespace_ops_layout_Pipeline_EMIT      |     -|              -|         -|        7|     -|       yes|        7|     28.000|  1.39|        -|         -|   134 (~0%)|    95 (~0%)|    -|
+|     o EMIT                                               |     -|              -|         2|        1|     5|       yes|        5|     20.000|  2.92|        -|         -|           -|           -|    -|
+|  + p_anonymous_namespace_ops_calc                        |     -|              -|         -|     1611|     -|        no|     1611|  6.444e+03|  0.01|        -|  19 (~0%)|  1406 (~0%)|  1434 (~0%)|    -|
+|   + p_anonymous_namespace_ops_calc_Pipeline_CALC         |     -|              -|         -|     1608|     -|       yes|     1608|  6.432e+03|  0.01|        -|  16 (~0%)|  1169 (~0%)|  1339 (~0%)|    -|
+|    o CALC                                                |     -|              -|         8|        1|  1600|       yes|     1606|  6.424e+03|  2.92|        -|         -|           -|           -|    -|
+|  + p_anonymous_namespace_ops_write                       |     -|              -|         -|     1611|     -|        no|     1611|  6.444e+03|  0.00|        -|         -|   298 (~0%)|   438 (~0%)|    -|
+|   + p_anonymous_namespace_ops_write_Pipeline_WRITE       |     -|              -|         -|     1603|     -|       yes|     1603|  6.412e+03|  0.00|        -|         -|   164 (~0%)|   139 (~0%)|    -|
+|    o WRITE                                               |     -|              -|         3|        1|  1600|       yes|     1601|  6.404e+03|  2.92|        -|         -|           -|           -|    -|
++----------------------------------------------------------+------+---------------+----------+---------+------+----------+---------+-----------+------+---------+----------+------------+------------+-----+
+    Name Prefix: '+' for module, 'o' for loop, '*' for dataflow
+
+
+================================================================
+== HW Interfaces
+================================================================
+* M_AXI
++----------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+| Interface      | Read/Write | Data Width | Address Width | Latency | Offset | Register | Max Widen | Max Read     | Max Write    | Num Read    | Num Write   | Resource Estimate |
+|                |            | (SW->HW)   |               |         |        |          | Bitwidth  | Burst Length | Burst Length | Outstanding | Outstanding |                   |
++----------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+| m_axi_gmem_opa | READ_ONLY  | 128 -> 128 | 64            | 0       | slave  | 0        | 0         | 64           | 16           | 16          | 16          | BRAM=8            |
+| m_axi_gmem_opd | READ_WRITE | 128 -> 128 | 64            | 0       | slave  | 0        | 0         | 64           | 64           | 16          | 16          | BRAM=16           |
++----------------+------------+------------+---------------+---------+--------+----------+-----------+--------------+--------------+-------------+-------------+-------------------+
+
+* S_AXILITE Interfaces
++---------------+------------+---------------+--------+----------+
+| Interface     | Data Width | Address Width | Offset | Register |
++---------------+------------+---------------+--------+----------+
+| s_axi_control | 32         | 7             | 16     | 0        |
++---------------+------------+---------------+--------+----------+
+
+* S_AXILITE Registers
++---------------+----------+--------+-------+--------+----------------------------------+----------------------------------------------------------------------+
+| Interface     | Register | Offset | Width | Access | Description                      | Bit Fields                                                           |
++---------------+----------+--------+-------+--------+----------------------------------+----------------------------------------------------------------------+
+| s_axi_control | CTRL     | 0x00   | 32    | RW     | Control signals                  | 0=AP_START 1=AP_DONE 2=AP_IDLE 3=AP_READY 7=AUTO_RESTART 9=INTERRUPT |
+| s_axi_control | GIER     | 0x04   | 32    | RW     | Global Interrupt Enable Register | 0=Enable                                                             |
+| s_axi_control | IP_IER   | 0x08   | 32    | RW     | IP Interrupt Enable Register     | 0=CHAN0_INT_EN 1=CHAN1_INT_EN                                        |
+| s_axi_control | IP_ISR   | 0x0c   | 32    | RW     | IP Interrupt Status Register     | 0=CHAN0_INT_ST 1=CHAN1_INT_ST                                        |
+| s_axi_control | Sa_1     | 0x10   | 32    | W      | Data signal of Sa                |                                                                      |
+| s_axi_control | Sa_2     | 0x14   | 32    | W      | Data signal of Sa                |                                                                      |
+| s_axi_control | Sb_1     | 0x1c   | 32    | W      | Data signal of Sb                |                                                                      |
+| s_axi_control | Sb_2     | 0x20   | 32    | W      | Data signal of Sb                |                                                                      |
+| s_axi_control | Dst_1    | 0x28   | 32    | W      | Data signal of Dst               |                                                                      |
+| s_axi_control | Dst_2    | 0x2c   | 32    | W      | Data signal of Dst               |                                                                      |
+| s_axi_control | Par_1    | 0x34   | 32    | W      | Data signal of Par               |                                                                      |
+| s_axi_control | Par_2    | 0x38   | 32    | W      | Data signal of Par               |                                                                      |
+| s_axi_control | C        | 0x40   | 32    | W      | Data signal of C                 |                                                                      |
+| s_axi_control | units    | 0x48   | 32    | W      | Data signal of units             |                                                                      |
+| s_axi_control | amode    | 0x50   | 32    | W      | Data signal of amode             |                                                                      |
+| s_axi_control | bmode    | 0x58   | 32    | W      | Data signal of bmode             |                                                                      |
++---------------+----------+--------+-------+--------+----------------------------------+----------------------------------------------------------------------+
+
+* TOP LEVEL CONTROL
++-----------+------------+-----------+
+| Interface | Type       | Ports     |
++-----------+------------+-----------+
+| ap_clk    | clock      | ap_clk    |
+| ap_rst_n  | reset      | ap_rst_n  |
+| interrupt | interrupt  | interrupt |
+| ap_ctrl   | ap_ctrl_hs |           |
++-----------+------------+-----------+
+
+
+================================================================
+== SW I/O Information
+================================================================
+* Top Function Arguments
++----------+-----------+----------------------+
+| Argument | Direction | Datatype             |
++----------+-----------+----------------------+
+| Sa       | in        | ap_uint<128> const * |
+| Sb       | inout     | ap_uint<128> const * |
+| Dst      | inout     | ap_uint<128>*        |
+| Par      | in        | ap_uint<128> const * |
+| C        | in        | int                  |
+| units    | in        | int                  |
+| amode    | in        | int                  |
+| bmode    | in        | int                  |
++----------+-----------+----------------------+
+
+* SW-to-HW Mapping
++----------+----------------+-----------+----------+---------------------------------+
+| Argument | HW Interface   | HW Type   | HW Usage | HW Info                         |
++----------+----------------+-----------+----------+---------------------------------+
+| Sa       | m_axi_gmem_opa | interface |          | channel=0                       |
+| Sa       | s_axi_control  | register  | offset   | name=Sa_1 offset=0x10 range=32  |
+| Sa       | s_axi_control  | register  | offset   | name=Sa_2 offset=0x14 range=32  |
+| Sb       | m_axi_gmem_opd | interface |          | channel=0                       |
+| Sb       | s_axi_control  | register  | offset   | name=Sb_1 offset=0x1c range=32  |
+| Sb       | s_axi_control  | register  | offset   | name=Sb_2 offset=0x20 range=32  |
+| Dst      | m_axi_gmem_opd | interface |          | channel=0                       |
+| Dst      | s_axi_control  | register  | offset   | name=Dst_1 offset=0x28 range=32 |
+| Dst      | s_axi_control  | register  | offset   | name=Dst_2 offset=0x2c range=32 |
+| Par      | m_axi_gmem_opa | interface |          | channel=0                       |
+| Par      | s_axi_control  | register  | offset   | name=Par_1 offset=0x34 range=32 |
+| Par      | s_axi_control  | register  | offset   | name=Par_2 offset=0x38 range=32 |
+| C        | s_axi_control  | register  |          | name=C offset=0x40 range=32     |
+| units    | s_axi_control  | register  |          | name=units offset=0x48 range=32 |
+| amode    | s_axi_control  | register  |          | name=amode offset=0x50 range=32 |
+| bmode    | s_axi_control  | register  |          | name=bmode offset=0x58 range=32 |
++----------+----------------+-----------+----------+---------------------------------+
+
+
+================================================================
+== M_AXI Burst Information
+================================================================
+ Note: All burst requests might be further partitioned into multiple requests during RTL generation based on max_read_burst_length or max_write_burst_length settings.
+
+* Inferred Burst Summary
++----------------+-----------+----------+-------+-------+----------------------------------------------+
+| HW Interface   | Direction | Length   | Width | Loop  | Loop Location                                |
++----------------+-----------+----------+-------+-------+----------------------------------------------+
+| m_axi_gmem_opa | read      | variable | 128   | READ  | ../t/model_c/hls_kernel/ops_engine.cpp:16:5  |
+| m_axi_gmem_opa | read      | variable | 128   | PAR   | ../t/model_c/hls_kernel/ops_engine.cpp:145:5 |
+| m_axi_gmem_opd | read      | variable | 128   | READ  | ../t/model_c/hls_kernel/ops_engine.cpp:16:5  |
+| m_axi_gmem_opd | write     | variable | 128   | WRITE | ../t/model_c/hls_kernel/ops_engine.cpp:102:5 |
++----------------+-----------+----------+-------+-------+----------------------------------------------+
+
+* All M_AXI Variable Accesses
++-------------------------+----------+-----------------------------------------------+-----------+--------------+----------+-------+----------------------------------------------+------------+--------------------------------------------------------------------------------------------------------+
+| HW Interface            | Variable | Access Location                               | Direction | Burst Status | Length   | Loop  | Loop Location                                | Resolution | Problem                                                                                                |
++-------------------------+----------+-----------------------------------------------+-----------+--------------+----------+-------+----------------------------------------------+------------+--------------------------------------------------------------------------------------------------------+
+| m_axi_gmem_opa          | Par      | ../t/model_c/hls_kernel/ops_engine.cpp:148:32 | read      | Widen Fail   |          | PAR   | ../t/model_c/hls_kernel/ops_engine.cpp:145:5 | 214-353    | Could not widen since type i128 size is greater than or equal to the max_widen_bitwidth threshold of 0 |
+| m_axi_gmem_opa          | Par      | ../t/model_c/hls_kernel/ops_engine.cpp:148:32 | read      | Inferred     | variable | PAR   | ../t/model_c/hls_kernel/ops_engine.cpp:145:5 |            |                                                                                                        |
+| m_axi_gmem_opa,gmem_opd | M        | ../t/model_c/hls_kernel/ops_engine.cpp:19:11  | read      | Widen Fail   |          | READ  | ../t/model_c/hls_kernel/ops_engine.cpp:16:5  | 214-353    | Could not widen since type i128 size is greater than or equal to the max_widen_bitwidth threshold of 0 |
+| m_axi_gmem_opa,gmem_opd | M        | ../t/model_c/hls_kernel/ops_engine.cpp:19:11  | read      | Inferred     | variable | READ  | ../t/model_c/hls_kernel/ops_engine.cpp:16:5  |            |                                                                                                        |
+| m_axi_gmem_opd          | M        | ../t/model_c/hls_kernel/ops_engine.cpp:19:11  | write     | Widen Fail   |          | WRITE | ../t/model_c/hls_kernel/ops_engine.cpp:102:5 | 214-353    | Could not widen since type i128 size is greater than or equal to the max_widen_bitwidth threshold of 0 |
+| m_axi_gmem_opd          | M        | ../t/model_c/hls_kernel/ops_engine.cpp:105:14 | write     | Inferred     | variable | WRITE | ../t/model_c/hls_kernel/ops_engine.cpp:102:5 |            |                                                                                                        |
++-------------------------+----------+-----------------------------------------------+-----------+--------------+----------+-------+----------------------------------------------+------------+--------------------------------------------------------------------------------------------------------+
+
+    * Resolution URL: docs.amd.com/access/sources/dita/topic?Doc_Version=2026.1%20English&url=ug1448-hls-guidance&resourceid=XXX-YYY.html (replace XXX-YYY with column value)
+
+================================================================
+== Bind Op Report
+================================================================
++---------------------------------------------------------+-----+--------+-----------------+-----------+--------------------------+---------+
+| Name                                                    | DSP | Pragma | Variable        | Op        | Impl                     | Latency |
++---------------------------------------------------------+-----+--------+-----------------+-----------+--------------------------+---------+
+| + y26_ops_top                                           | 25  |        |                 |           |                          |         |
+|   icmp_ln145_fu_208_p2                                  |     |        | icmp_ln145      | setgt     | auto                     | 0       |
+|   empty_fu_228_p3                                       |     |        | empty           | select    | auto_sel                 | 0       |
+|   bp24_fu_236_p2                                        |     |        | bp24            | seteq     | auto                     | 0       |
+|   hasb_fu_242_p2                                        |     |        | hasb            | setne     | auto                     | 0       |
+|   icmp_ln153_fu_282_p2                                  |     |        | icmp_ln153      | setne     | auto                     | 0       |
+|   grp_fu_200_p0                                         |     |        | select_ln153    | select    | auto_sel                 | 0       |
+|   mul_32s_32s_32_2_1_U140                               | 3   |        | asrc            | mul       | auto                     | 1       |
+|   mul_32s_32s_32_2_1_U139                               | 3   |        | mul_ln153       | mul       | auto                     | 1       |
+|   grp_fu_322_p0                                         |     |        | bsrc            | select    | auto_sel                 | 0       |
+|   add_ln154_fu_333_p2                                   |     |        | add_ln154       | add       | fabric                   | 0       |
+|   grp_fu_310_p10                                        |     |        | select_ln154    | select    | auto_sel                 | 0       |
+|   mul_32s_4s_32_2_1_U141                                |     |        | mul_ln154       | mul       | auto                     | 1       |
+|   grp_fu_322_p10                                        |     |        | select_ln155    | select    | auto_sel                 | 0       |
+|   mul_32s_4s_32_2_1_U142                                |     |        | mul_ln155       | mul       | auto                     | 1       |
+|   add_ln155_fu_343_p2                                   |     |        | add_ln155       | add       | fabric                   | 0       |
+|  + y26_ops_top_Pipeline_PAR                             | 0   |        |                 |           |                          |         |
+|    icmp_ln145_fu_110_p2                                 |     |        | icmp_ln145      | setlt     | auto                     | 0       |
+|    add_ln145_fu_116_p2                                  |     |        | add_ln145       | add       | fabric                   | 0       |
+|  + p_anonymous_namespace_ops_run                        | 19  |        |                 |           |                          |         |
+|   + p_anonymous_namespace_ops_read                      | 0   |        |                 |           |                          |         |
+|     icmp_ln16_fu_80_p2                                  |     |        | icmp_ln16       | setgt     | auto                     | 0       |
+|     empty_fu_90_p3                                      |     |        | empty           | select    | auto_sel                 | 0       |
+|    + p_anonymous_namespace_ops_read_Pipeline_READ       | 0   |        |                 |           |                          |         |
+|      icmp_ln16_fu_104_p2                                |     |        | icmp_ln16       | setlt     | auto                     | 0       |
+|      add_ln16_fu_110_p2                                 |     |        | add_ln16        | add       | fabric                   | 0       |
+|   + p_anonymous_namespace_ops_read_2                    | 0   |        |                 |           |                          |         |
+|     icmp_ln16_fu_80_p2                                  |     |        | icmp_ln16       | setgt     | auto                     | 0       |
+|     empty_fu_90_p3                                      |     |        | empty           | select    | auto_sel                 | 0       |
+|    + p_anonymous_namespace_ops_read_2_Pipeline_READ     | 0   |        |                 |           |                          |         |
+|      icmp_ln16_fu_104_p2                                |     |        | icmp_ln16       | setlt     | auto                     | 0       |
+|      add_ln16_fu_110_p2                                 |     |        | add_ln16        | add       | fabric                   | 0       |
+|   + p_anonymous_namespace_ops_layout_1                  | 0   |        |                 |           |                          |         |
+|     icmp_ln25_fu_320_p2                                 |     |        | icmp_ln25       | setne     | auto                     | 0       |
+|     or_ln25_fu_326_p2                                   |     |        | or_ln25         | or        | auto                     | 0       |
+|     add_ln27_fu_363_p2                                  |     |        | add_ln27        | add       | fabric                   | 0       |
+|     select_ln34_fu_332_p3                               |     |        | select_ln34     | select    | auto_sel                 | 0       |
+|     select_ln36_fu_340_p3                               |     |        | select_ln36     | select    | auto_sel                 | 0       |
+|     icmp_ln36_fu_376_p2                                 |     |        | icmp_ln36       | setlt     | auto                     | 0       |
+|     add_ln36_fu_381_p2                                  |     |        | add_ln36        | add       | fabric                   | 0       |
+|     unit_1_fu_464_p3                                    |     |        | unit_1          | select    | auto_sel                 | 0       |
+|     icmp_ln61_fu_475_p2                                 |     |        | icmp_ln61       | seteq     | auto                     | 0       |
+|     icmp_ln61_1_fu_481_p2                               |     |        | icmp_ln61_1     | seteq     | auto                     | 0       |
+|     select_ln61_fu_495_p3                               |     |        | select_ln61     | select    | auto_sel                 | 0       |
+|     select_ln61_1_fu_503_p3                             |     |        | select_ln61_1   | select    | auto_sel                 | 0       |
+|     select_ln61_2_fu_519_p3                             |     |        | select_ln61_2   | select    | auto_sel                 | 0       |
+|     select_ln61_3_fu_527_p3                             |     |        | select_ln61_3   | select    | auto_sel                 | 0       |
+|     select_ln61_4_fu_543_p3                             |     |        | select_ln61_4   | select    | auto_sel                 | 0       |
+|     select_ln61_5_fu_551_p3                             |     |        | select_ln61_5   | select    | auto_sel                 | 0       |
+|     select_ln61_6_fu_567_p3                             |     |        | select_ln61_6   | select    | auto_sel                 | 0       |
+|     select_ln61_7_fu_575_p3                             |     |        | select_ln61_7   | select    | auto_sel                 | 0       |
+|     select_ln61_8_fu_591_p3                             |     |        | select_ln61_8   | select    | auto_sel                 | 0       |
+|     select_ln61_9_fu_599_p3                             |     |        | select_ln61_9   | select    | auto_sel                 | 0       |
+|     select_ln61_10_fu_615_p3                            |     |        | select_ln61_10  | select    | auto_sel                 | 0       |
+|     select_ln61_11_fu_623_p3                            |     |        | select_ln61_11  | select    | auto_sel                 | 0       |
+|     select_ln61_12_fu_639_p3                            |     |        | select_ln61_12  | select    | auto_sel                 | 0       |
+|     select_ln61_13_fu_647_p3                            |     |        | select_ln61_13  | select    | auto_sel                 | 0       |
+|     select_ln61_14_fu_663_p3                            |     |        | select_ln61_14  | select    | auto_sel                 | 0       |
+|     select_ln61_15_fu_671_p3                            |     |        | select_ln61_15  | select    | auto_sel                 | 0       |
+|     select_ln61_16_fu_687_p3                            |     |        | select_ln61_16  | select    | auto_sel                 | 0       |
+|     select_ln61_17_fu_695_p3                            |     |        | select_ln61_17  | select    | auto_sel                 | 0       |
+|     select_ln61_18_fu_711_p3                            |     |        | select_ln61_18  | select    | auto_sel                 | 0       |
+|     select_ln61_19_fu_719_p3                            |     |        | select_ln61_19  | select    | auto_sel                 | 0       |
+|     select_ln61_20_fu_735_p3                            |     |        | select_ln61_20  | select    | auto_sel                 | 0       |
+|     select_ln61_21_fu_743_p3                            |     |        | select_ln61_21  | select    | auto_sel                 | 0       |
+|     select_ln61_22_fu_759_p3                            |     |        | select_ln61_22  | select    | auto_sel                 | 0       |
+|     select_ln61_23_fu_767_p3                            |     |        | select_ln61_23  | select    | auto_sel                 | 0       |
+|     select_ln61_24_fu_783_p3                            |     |        | select_ln61_24  | select    | auto_sel                 | 0       |
+|     select_ln61_25_fu_791_p3                            |     |        | select_ln61_25  | select    | auto_sel                 | 0       |
+|     select_ln61_26_fu_807_p3                            |     |        | select_ln61_26  | select    | auto_sel                 | 0       |
+|     select_ln61_27_fu_815_p3                            |     |        | select_ln61_27  | select    | auto_sel                 | 0       |
+|     select_ln61_28_fu_831_p3                            |     |        | select_ln61_28  | select    | auto_sel                 | 0       |
+|     select_ln61_29_fu_839_p3                            |     |        | select_ln61_29  | select    | auto_sel                 | 0       |
+|     select_ln61_30_fu_892_p3                            |     |        | select_ln61_30  | select    | auto_sel                 | 0       |
+|     select_ln61_31_fu_900_p3                            |     |        | select_ln61_31  | select    | auto_sel                 | 0       |
+|     select_ln61_32_fu_916_p3                            |     |        | select_ln61_32  | select    | auto_sel                 | 0       |
+|     select_ln61_33_fu_924_p3                            |     |        | select_ln61_33  | select    | auto_sel                 | 0       |
+|     select_ln61_34_fu_940_p3                            |     |        | select_ln61_34  | select    | auto_sel                 | 0       |
+|     select_ln61_35_fu_948_p3                            |     |        | select_ln61_35  | select    | auto_sel                 | 0       |
+|     select_ln61_36_fu_964_p3                            |     |        | select_ln61_36  | select    | auto_sel                 | 0       |
+|     select_ln61_37_fu_972_p3                            |     |        | select_ln61_37  | select    | auto_sel                 | 0       |
+|     select_ln61_38_fu_988_p3                            |     |        | select_ln61_38  | select    | auto_sel                 | 0       |
+|     select_ln61_39_fu_996_p3                            |     |        | select_ln61_39  | select    | auto_sel                 | 0       |
+|     select_ln61_40_fu_1012_p3                           |     |        | select_ln61_40  | select    | auto_sel                 | 0       |
+|     select_ln61_41_fu_1020_p3                           |     |        | select_ln61_41  | select    | auto_sel                 | 0       |
+|     select_ln61_42_fu_1036_p3                           |     |        | select_ln61_42  | select    | auto_sel                 | 0       |
+|     select_ln61_43_fu_1044_p3                           |     |        | select_ln61_43  | select    | auto_sel                 | 0       |
+|     select_ln61_44_fu_1060_p3                           |     |        | select_ln61_44  | select    | auto_sel                 | 0       |
+|     select_ln61_45_fu_1068_p3                           |     |        | select_ln61_45  | select    | auto_sel                 | 0       |
+|     select_ln61_46_fu_1084_p3                           |     |        | select_ln61_46  | select    | auto_sel                 | 0       |
+|     select_ln61_47_fu_1092_p3                           |     |        | select_ln61_47  | select    | auto_sel                 | 0       |
+|     select_ln61_48_fu_1108_p3                           |     |        | select_ln61_48  | select    | auto_sel                 | 0       |
+|     select_ln61_49_fu_1116_p3                           |     |        | select_ln61_49  | select    | auto_sel                 | 0       |
+|     select_ln61_50_fu_1132_p3                           |     |        | select_ln61_50  | select    | auto_sel                 | 0       |
+|     select_ln61_51_fu_1140_p3                           |     |        | select_ln61_51  | select    | auto_sel                 | 0       |
+|     select_ln61_52_fu_1156_p3                           |     |        | select_ln61_52  | select    | auto_sel                 | 0       |
+|     select_ln61_53_fu_1164_p3                           |     |        | select_ln61_53  | select    | auto_sel                 | 0       |
+|     select_ln61_54_fu_1180_p3                           |     |        | select_ln61_54  | select    | auto_sel                 | 0       |
+|     select_ln61_55_fu_1188_p3                           |     |        | select_ln61_55  | select    | auto_sel                 | 0       |
+|     select_ln61_56_fu_1204_p3                           |     |        | select_ln61_56  | select    | auto_sel                 | 0       |
+|     select_ln61_57_fu_1212_p3                           |     |        | select_ln61_57  | select    | auto_sel                 | 0       |
+|     select_ln61_58_fu_1228_p3                           |     |        | select_ln61_58  | select    | auto_sel                 | 0       |
+|     select_ln61_59_fu_1236_p3                           |     |        | select_ln61_59  | select    | auto_sel                 | 0       |
+|     select_ln61_60_fu_1252_p3                           |     |        | select_ln61_60  | select    | auto_sel                 | 0       |
+|     select_ln61_61_fu_1260_p3                           |     |        | select_ln61_61  | select    | auto_sel                 | 0       |
+|     select_ln61_62_fu_1313_p3                           |     |        | select_ln61_62  | select    | auto_sel                 | 0       |
+|     select_ln61_63_fu_1321_p3                           |     |        | select_ln61_63  | select    | auto_sel                 | 0       |
+|     select_ln61_64_fu_1337_p3                           |     |        | select_ln61_64  | select    | auto_sel                 | 0       |
+|     select_ln61_65_fu_1345_p3                           |     |        | select_ln61_65  | select    | auto_sel                 | 0       |
+|     select_ln61_66_fu_1361_p3                           |     |        | select_ln61_66  | select    | auto_sel                 | 0       |
+|     select_ln61_67_fu_1369_p3                           |     |        | select_ln61_67  | select    | auto_sel                 | 0       |
+|     select_ln61_68_fu_1385_p3                           |     |        | select_ln61_68  | select    | auto_sel                 | 0       |
+|     select_ln61_69_fu_1393_p3                           |     |        | select_ln61_69  | select    | auto_sel                 | 0       |
+|     select_ln61_70_fu_1409_p3                           |     |        | select_ln61_70  | select    | auto_sel                 | 0       |
+|     select_ln61_71_fu_1417_p3                           |     |        | select_ln61_71  | select    | auto_sel                 | 0       |
+|     select_ln61_72_fu_1433_p3                           |     |        | select_ln61_72  | select    | auto_sel                 | 0       |
+|     select_ln61_73_fu_1441_p3                           |     |        | select_ln61_73  | select    | auto_sel                 | 0       |
+|     select_ln61_74_fu_1457_p3                           |     |        | select_ln61_74  | select    | auto_sel                 | 0       |
+|     select_ln61_75_fu_1465_p3                           |     |        | select_ln61_75  | select    | auto_sel                 | 0       |
+|     select_ln61_76_fu_1481_p3                           |     |        | select_ln61_76  | select    | auto_sel                 | 0       |
+|     select_ln61_77_fu_1489_p3                           |     |        | select_ln61_77  | select    | auto_sel                 | 0       |
+|     select_ln61_78_fu_1505_p3                           |     |        | select_ln61_78  | select    | auto_sel                 | 0       |
+|     select_ln61_79_fu_1513_p3                           |     |        | select_ln61_79  | select    | auto_sel                 | 0       |
+|     select_ln61_80_fu_1529_p3                           |     |        | select_ln61_80  | select    | auto_sel                 | 0       |
+|     select_ln61_81_fu_1537_p3                           |     |        | select_ln61_81  | select    | auto_sel                 | 0       |
+|     select_ln61_82_fu_1553_p3                           |     |        | select_ln61_82  | select    | auto_sel                 | 0       |
+|     select_ln61_83_fu_1561_p3                           |     |        | select_ln61_83  | select    | auto_sel                 | 0       |
+|     select_ln61_84_fu_1577_p3                           |     |        | select_ln61_84  | select    | auto_sel                 | 0       |
+|     select_ln61_85_fu_1585_p3                           |     |        | select_ln61_85  | select    | auto_sel                 | 0       |
+|     select_ln61_86_fu_1601_p3                           |     |        | select_ln61_86  | select    | auto_sel                 | 0       |
+|     select_ln61_87_fu_1609_p3                           |     |        | select_ln61_87  | select    | auto_sel                 | 0       |
+|     select_ln61_88_fu_1625_p3                           |     |        | select_ln61_88  | select    | auto_sel                 | 0       |
+|     select_ln61_89_fu_1633_p3                           |     |        | select_ln61_89  | select    | auto_sel                 | 0       |
+|     select_ln61_90_fu_1649_p3                           |     |        | select_ln61_90  | select    | auto_sel                 | 0       |
+|     select_ln61_91_fu_1657_p3                           |     |        | select_ln61_91  | select    | auto_sel                 | 0       |
+|     select_ln61_92_fu_1673_p3                           |     |        | select_ln61_92  | select    | auto_sel                 | 0       |
+|     select_ln61_93_fu_1681_p3                           |     |        | select_ln61_93  | select    | auto_sel                 | 0       |
+|     select_ln61_94_fu_1734_p3                           |     |        | select_ln61_94  | select    | auto_sel                 | 0       |
+|     select_ln61_95_fu_1742_p3                           |     |        | select_ln61_95  | select    | auto_sel                 | 0       |
+|     select_ln61_96_fu_1758_p3                           |     |        | select_ln61_96  | select    | auto_sel                 | 0       |
+|     select_ln61_97_fu_1766_p3                           |     |        | select_ln61_97  | select    | auto_sel                 | 0       |
+|     select_ln61_98_fu_1782_p3                           |     |        | select_ln61_98  | select    | auto_sel                 | 0       |
+|     select_ln61_99_fu_1790_p3                           |     |        | select_ln61_99  | select    | auto_sel                 | 0       |
+|     select_ln61_100_fu_1806_p3                          |     |        | select_ln61_100 | select    | auto_sel                 | 0       |
+|     select_ln61_101_fu_1814_p3                          |     |        | select_ln61_101 | select    | auto_sel                 | 0       |
+|     select_ln61_102_fu_1830_p3                          |     |        | select_ln61_102 | select    | auto_sel                 | 0       |
+|     select_ln61_103_fu_1838_p3                          |     |        | select_ln61_103 | select    | auto_sel                 | 0       |
+|     select_ln61_104_fu_1854_p3                          |     |        | select_ln61_104 | select    | auto_sel                 | 0       |
+|     select_ln61_105_fu_1862_p3                          |     |        | select_ln61_105 | select    | auto_sel                 | 0       |
+|     select_ln61_106_fu_1878_p3                          |     |        | select_ln61_106 | select    | auto_sel                 | 0       |
+|     select_ln61_107_fu_1886_p3                          |     |        | select_ln61_107 | select    | auto_sel                 | 0       |
+|     select_ln61_108_fu_1902_p3                          |     |        | select_ln61_108 | select    | auto_sel                 | 0       |
+|     select_ln61_109_fu_1910_p3                          |     |        | select_ln61_109 | select    | auto_sel                 | 0       |
+|     select_ln61_110_fu_1926_p3                          |     |        | select_ln61_110 | select    | auto_sel                 | 0       |
+|     select_ln61_111_fu_1934_p3                          |     |        | select_ln61_111 | select    | auto_sel                 | 0       |
+|     select_ln61_112_fu_1950_p3                          |     |        | select_ln61_112 | select    | auto_sel                 | 0       |
+|     select_ln61_113_fu_1958_p3                          |     |        | select_ln61_113 | select    | auto_sel                 | 0       |
+|     select_ln61_114_fu_1974_p3                          |     |        | select_ln61_114 | select    | auto_sel                 | 0       |
+|     select_ln61_115_fu_1982_p3                          |     |        | select_ln61_115 | select    | auto_sel                 | 0       |
+|     select_ln61_116_fu_1998_p3                          |     |        | select_ln61_116 | select    | auto_sel                 | 0       |
+|     select_ln61_117_fu_2006_p3                          |     |        | select_ln61_117 | select    | auto_sel                 | 0       |
+|     select_ln61_118_fu_2022_p3                          |     |        | select_ln61_118 | select    | auto_sel                 | 0       |
+|     select_ln61_119_fu_2030_p3                          |     |        | select_ln61_119 | select    | auto_sel                 | 0       |
+|     select_ln61_120_fu_2046_p3                          |     |        | select_ln61_120 | select    | auto_sel                 | 0       |
+|     select_ln61_121_fu_2054_p3                          |     |        | select_ln61_121 | select    | auto_sel                 | 0       |
+|     select_ln61_122_fu_2070_p3                          |     |        | select_ln61_122 | select    | auto_sel                 | 0       |
+|     select_ln61_123_fu_2078_p3                          |     |        | select_ln61_123 | select    | auto_sel                 | 0       |
+|     select_ln61_124_fu_2094_p3                          |     |        | select_ln61_124 | select    | auto_sel                 | 0       |
+|     select_ln61_125_fu_2102_p3                          |     |        | select_ln61_125 | select    | auto_sel                 | 0       |
+|     select_ln61_126_fu_2155_p3                          |     |        | select_ln61_126 | select    | auto_sel                 | 0       |
+|     select_ln61_127_fu_2163_p3                          |     |        | select_ln61_127 | select    | auto_sel                 | 0       |
+|     select_ln61_128_fu_2179_p3                          |     |        | select_ln61_128 | select    | auto_sel                 | 0       |
+|     select_ln61_129_fu_2187_p3                          |     |        | select_ln61_129 | select    | auto_sel                 | 0       |
+|     select_ln61_130_fu_2203_p3                          |     |        | select_ln61_130 | select    | auto_sel                 | 0       |
+|     select_ln61_131_fu_2211_p3                          |     |        | select_ln61_131 | select    | auto_sel                 | 0       |
+|     select_ln61_132_fu_2227_p3                          |     |        | select_ln61_132 | select    | auto_sel                 | 0       |
+|     select_ln61_133_fu_2235_p3                          |     |        | select_ln61_133 | select    | auto_sel                 | 0       |
+|     select_ln61_134_fu_2251_p3                          |     |        | select_ln61_134 | select    | auto_sel                 | 0       |
+|     select_ln61_135_fu_2259_p3                          |     |        | select_ln61_135 | select    | auto_sel                 | 0       |
+|     select_ln61_136_fu_2275_p3                          |     |        | select_ln61_136 | select    | auto_sel                 | 0       |
+|     select_ln61_137_fu_2283_p3                          |     |        | select_ln61_137 | select    | auto_sel                 | 0       |
+|     select_ln61_138_fu_2299_p3                          |     |        | select_ln61_138 | select    | auto_sel                 | 0       |
+|     select_ln61_139_fu_2307_p3                          |     |        | select_ln61_139 | select    | auto_sel                 | 0       |
+|     select_ln61_140_fu_2323_p3                          |     |        | select_ln61_140 | select    | auto_sel                 | 0       |
+|     select_ln61_141_fu_2331_p3                          |     |        | select_ln61_141 | select    | auto_sel                 | 0       |
+|     select_ln61_142_fu_2347_p3                          |     |        | select_ln61_142 | select    | auto_sel                 | 0       |
+|     select_ln61_143_fu_2355_p3                          |     |        | select_ln61_143 | select    | auto_sel                 | 0       |
+|     select_ln61_144_fu_2371_p3                          |     |        | select_ln61_144 | select    | auto_sel                 | 0       |
+|     select_ln61_145_fu_2379_p3                          |     |        | select_ln61_145 | select    | auto_sel                 | 0       |
+|     select_ln61_146_fu_2395_p3                          |     |        | select_ln61_146 | select    | auto_sel                 | 0       |
+|     select_ln61_147_fu_2403_p3                          |     |        | select_ln61_147 | select    | auto_sel                 | 0       |
+|     select_ln61_148_fu_2419_p3                          |     |        | select_ln61_148 | select    | auto_sel                 | 0       |
+|     select_ln61_149_fu_2427_p3                          |     |        | select_ln61_149 | select    | auto_sel                 | 0       |
+|     select_ln61_150_fu_2443_p3                          |     |        | select_ln61_150 | select    | auto_sel                 | 0       |
+|     select_ln61_151_fu_2451_p3                          |     |        | select_ln61_151 | select    | auto_sel                 | 0       |
+|     select_ln61_152_fu_2467_p3                          |     |        | select_ln61_152 | select    | auto_sel                 | 0       |
+|     select_ln61_153_fu_2475_p3                          |     |        | select_ln61_153 | select    | auto_sel                 | 0       |
+|     select_ln61_154_fu_2491_p3                          |     |        | select_ln61_154 | select    | auto_sel                 | 0       |
+|     select_ln61_155_fu_2499_p3                          |     |        | select_ln61_155 | select    | auto_sel                 | 0       |
+|     select_ln61_156_fu_2515_p3                          |     |        | select_ln61_156 | select    | auto_sel                 | 0       |
+|     select_ln61_157_fu_2523_p3                          |     |        | select_ln61_157 | select    | auto_sel                 | 0       |
+|     select_ln61_158_fu_2568_p3                          |     |        | select_ln61_158 | select    | auto_sel                 | 0       |
+|     select_ln61_159_fu_2576_p3                          |     |        | select_ln61_159 | select    | auto_sel                 | 0       |
+|     select_ln61_160_fu_2584_p3                          |     |        | select_ln61_160 | select    | auto_sel                 | 0       |
+|     select_ln61_161_fu_2592_p3                          |     |        | select_ln61_161 | select    | auto_sel                 | 0       |
+|     select_ln61_162_fu_2600_p3                          |     |        | select_ln61_162 | select    | auto_sel                 | 0       |
+|     select_ln61_163_fu_2608_p3                          |     |        | select_ln61_163 | select    | auto_sel                 | 0       |
+|     select_ln61_164_fu_2616_p3                          |     |        | select_ln61_164 | select    | auto_sel                 | 0       |
+|     select_ln61_165_fu_2624_p3                          |     |        | select_ln61_165 | select    | auto_sel                 | 0       |
+|     select_ln61_166_fu_2632_p3                          |     |        | select_ln61_166 | select    | auto_sel                 | 0       |
+|     select_ln61_167_fu_2640_p3                          |     |        | select_ln61_167 | select    | auto_sel                 | 0       |
+|     select_ln61_168_fu_2648_p3                          |     |        | select_ln61_168 | select    | auto_sel                 | 0       |
+|     select_ln61_169_fu_2656_p3                          |     |        | select_ln61_169 | select    | auto_sel                 | 0       |
+|     select_ln61_170_fu_2664_p3                          |     |        | select_ln61_170 | select    | auto_sel                 | 0       |
+|     select_ln61_171_fu_2672_p3                          |     |        | select_ln61_171 | select    | auto_sel                 | 0       |
+|     select_ln61_172_fu_2680_p3                          |     |        | select_ln61_172 | select    | auto_sel                 | 0       |
+|     select_ln61_173_fu_2688_p3                          |     |        | select_ln61_173 | select    | auto_sel                 | 0       |
+|     select_ln61_174_fu_2733_p3                          |     |        | select_ln61_174 | select    | auto_sel                 | 0       |
+|     select_ln61_175_fu_2741_p3                          |     |        | select_ln61_175 | select    | auto_sel                 | 0       |
+|     select_ln61_176_fu_2749_p3                          |     |        | select_ln61_176 | select    | auto_sel                 | 0       |
+|     select_ln61_177_fu_2757_p3                          |     |        | select_ln61_177 | select    | auto_sel                 | 0       |
+|     select_ln61_178_fu_2765_p3                          |     |        | select_ln61_178 | select    | auto_sel                 | 0       |
+|     select_ln61_179_fu_2773_p3                          |     |        | select_ln61_179 | select    | auto_sel                 | 0       |
+|     select_ln61_180_fu_2781_p3                          |     |        | select_ln61_180 | select    | auto_sel                 | 0       |
+|     select_ln61_181_fu_2789_p3                          |     |        | select_ln61_181 | select    | auto_sel                 | 0       |
+|     select_ln61_182_fu_2797_p3                          |     |        | select_ln61_182 | select    | auto_sel                 | 0       |
+|     select_ln61_183_fu_2805_p3                          |     |        | select_ln61_183 | select    | auto_sel                 | 0       |
+|     select_ln61_184_fu_2813_p3                          |     |        | select_ln61_184 | select    | auto_sel                 | 0       |
+|     select_ln61_185_fu_2821_p3                          |     |        | select_ln61_185 | select    | auto_sel                 | 0       |
+|     select_ln61_186_fu_2829_p3                          |     |        | select_ln61_186 | select    | auto_sel                 | 0       |
+|     select_ln61_187_fu_2837_p3                          |     |        | select_ln61_187 | select    | auto_sel                 | 0       |
+|     select_ln61_188_fu_2845_p3                          |     |        | select_ln61_188 | select    | auto_sel                 | 0       |
+|     select_ln61_189_fu_2853_p3                          |     |        | select_ln61_189 | select    | auto_sel                 | 0       |
+|     select_ln61_190_fu_2898_p3                          |     |        | select_ln61_190 | select    | auto_sel                 | 0       |
+|     select_ln61_191_fu_2906_p3                          |     |        | select_ln61_191 | select    | auto_sel                 | 0       |
+|     select_ln61_192_fu_2914_p3                          |     |        | select_ln61_192 | select    | auto_sel                 | 0       |
+|     select_ln61_193_fu_2922_p3                          |     |        | select_ln61_193 | select    | auto_sel                 | 0       |
+|     select_ln61_194_fu_2930_p3                          |     |        | select_ln61_194 | select    | auto_sel                 | 0       |
+|     select_ln61_195_fu_2938_p3                          |     |        | select_ln61_195 | select    | auto_sel                 | 0       |
+|     select_ln61_196_fu_2946_p3                          |     |        | select_ln61_196 | select    | auto_sel                 | 0       |
+|     select_ln61_197_fu_2954_p3                          |     |        | select_ln61_197 | select    | auto_sel                 | 0       |
+|     select_ln61_198_fu_2962_p3                          |     |        | select_ln61_198 | select    | auto_sel                 | 0       |
+|     select_ln61_199_fu_2970_p3                          |     |        | select_ln61_199 | select    | auto_sel                 | 0       |
+|     select_ln61_200_fu_2978_p3                          |     |        | select_ln61_200 | select    | auto_sel                 | 0       |
+|     select_ln61_201_fu_2986_p3                          |     |        | select_ln61_201 | select    | auto_sel                 | 0       |
+|     select_ln61_202_fu_2994_p3                          |     |        | select_ln61_202 | select    | auto_sel                 | 0       |
+|     select_ln61_203_fu_3002_p3                          |     |        | select_ln61_203 | select    | auto_sel                 | 0       |
+|     select_ln61_204_fu_3010_p3                          |     |        | select_ln61_204 | select    | auto_sel                 | 0       |
+|     select_ln61_205_fu_3018_p3                          |     |        | select_ln61_205 | select    | auto_sel                 | 0       |
+|     select_ln61_206_fu_3063_p3                          |     |        | select_ln61_206 | select    | auto_sel                 | 0       |
+|     select_ln61_207_fu_3071_p3                          |     |        | select_ln61_207 | select    | auto_sel                 | 0       |
+|     select_ln61_208_fu_3079_p3                          |     |        | select_ln61_208 | select    | auto_sel                 | 0       |
+|     select_ln61_209_fu_3087_p3                          |     |        | select_ln61_209 | select    | auto_sel                 | 0       |
+|     select_ln61_210_fu_3095_p3                          |     |        | select_ln61_210 | select    | auto_sel                 | 0       |
+|     select_ln61_211_fu_3103_p3                          |     |        | select_ln61_211 | select    | auto_sel                 | 0       |
+|     select_ln61_212_fu_3111_p3                          |     |        | select_ln61_212 | select    | auto_sel                 | 0       |
+|     select_ln61_213_fu_3119_p3                          |     |        | select_ln61_213 | select    | auto_sel                 | 0       |
+|     select_ln61_214_fu_3127_p3                          |     |        | select_ln61_214 | select    | auto_sel                 | 0       |
+|     select_ln61_215_fu_3135_p3                          |     |        | select_ln61_215 | select    | auto_sel                 | 0       |
+|     select_ln61_216_fu_3143_p3                          |     |        | select_ln61_216 | select    | auto_sel                 | 0       |
+|     select_ln61_217_fu_3151_p3                          |     |        | select_ln61_217 | select    | auto_sel                 | 0       |
+|     select_ln61_218_fu_3159_p3                          |     |        | select_ln61_218 | select    | auto_sel                 | 0       |
+|     select_ln61_219_fu_3167_p3                          |     |        | select_ln61_219 | select    | auto_sel                 | 0       |
+|     select_ln61_220_fu_3175_p3                          |     |        | select_ln61_220 | select    | auto_sel                 | 0       |
+|     select_ln61_221_fu_3183_p3                          |     |        | select_ln61_221 | select    | auto_sel                 | 0       |
+|     select_ln61_222_fu_3228_p3                          |     |        | select_ln61_222 | select    | auto_sel                 | 0       |
+|     select_ln61_223_fu_3236_p3                          |     |        | select_ln61_223 | select    | auto_sel                 | 0       |
+|     select_ln61_224_fu_3244_p3                          |     |        | select_ln61_224 | select    | auto_sel                 | 0       |
+|     select_ln61_225_fu_3252_p3                          |     |        | select_ln61_225 | select    | auto_sel                 | 0       |
+|     select_ln61_226_fu_3260_p3                          |     |        | select_ln61_226 | select    | auto_sel                 | 0       |
+|     select_ln61_227_fu_3268_p3                          |     |        | select_ln61_227 | select    | auto_sel                 | 0       |
+|     select_ln61_228_fu_3276_p3                          |     |        | select_ln61_228 | select    | auto_sel                 | 0       |
+|     select_ln61_229_fu_3284_p3                          |     |        | select_ln61_229 | select    | auto_sel                 | 0       |
+|     select_ln61_230_fu_3292_p3                          |     |        | select_ln61_230 | select    | auto_sel                 | 0       |
+|     select_ln61_231_fu_3300_p3                          |     |        | select_ln61_231 | select    | auto_sel                 | 0       |
+|     select_ln61_232_fu_3308_p3                          |     |        | select_ln61_232 | select    | auto_sel                 | 0       |
+|     select_ln61_233_fu_3316_p3                          |     |        | select_ln61_233 | select    | auto_sel                 | 0       |
+|     select_ln61_234_fu_3324_p3                          |     |        | select_ln61_234 | select    | auto_sel                 | 0       |
+|     select_ln61_235_fu_3332_p3                          |     |        | select_ln61_235 | select    | auto_sel                 | 0       |
+|     select_ln61_236_fu_3340_p3                          |     |        | select_ln61_236 | select    | auto_sel                 | 0       |
+|     select_ln61_237_fu_3348_p3                          |     |        | select_ln61_237 | select    | auto_sel                 | 0       |
+|     select_ln61_238_fu_3393_p3                          |     |        | select_ln61_238 | select    | auto_sel                 | 0       |
+|     select_ln61_239_fu_3401_p3                          |     |        | select_ln61_239 | select    | auto_sel                 | 0       |
+|     select_ln61_240_fu_3409_p3                          |     |        | select_ln61_240 | select    | auto_sel                 | 0       |
+|     select_ln61_241_fu_3417_p3                          |     |        | select_ln61_241 | select    | auto_sel                 | 0       |
+|     select_ln61_242_fu_3425_p3                          |     |        | select_ln61_242 | select    | auto_sel                 | 0       |
+|     select_ln61_243_fu_3433_p3                          |     |        | select_ln61_243 | select    | auto_sel                 | 0       |
+|     select_ln61_244_fu_3441_p3                          |     |        | select_ln61_244 | select    | auto_sel                 | 0       |
+|     select_ln61_245_fu_3449_p3                          |     |        | select_ln61_245 | select    | auto_sel                 | 0       |
+|     select_ln61_246_fu_3457_p3                          |     |        | select_ln61_246 | select    | auto_sel                 | 0       |
+|     select_ln61_247_fu_3465_p3                          |     |        | select_ln61_247 | select    | auto_sel                 | 0       |
+|     select_ln61_248_fu_3473_p3                          |     |        | select_ln61_248 | select    | auto_sel                 | 0       |
+|     select_ln61_249_fu_3481_p3                          |     |        | select_ln61_249 | select    | auto_sel                 | 0       |
+|     select_ln61_250_fu_3489_p3                          |     |        | select_ln61_250 | select    | auto_sel                 | 0       |
+|     select_ln61_251_fu_3497_p3                          |     |        | select_ln61_251 | select    | auto_sel                 | 0       |
+|     select_ln61_252_fu_3505_p3                          |     |        | select_ln61_252 | select    | auto_sel                 | 0       |
+|     select_ln61_253_fu_3513_p3                          |     |        | select_ln61_253 | select    | auto_sel                 | 0       |
+|     select_ln61_254_fu_3521_p3                          |     |        | select_ln61_254 | select    | auto_sel                 | 0       |
+|     select_ln61_255_fu_3529_p3                          |     |        | select_ln61_255 | select    | auto_sel                 | 0       |
+|     select_ln61_256_fu_3537_p3                          |     |        | select_ln61_256 | select    | auto_sel                 | 0       |
+|     select_ln61_257_fu_3545_p3                          |     |        | select_ln61_257 | select    | auto_sel                 | 0       |
+|     select_ln61_258_fu_3553_p3                          |     |        | select_ln61_258 | select    | auto_sel                 | 0       |
+|     select_ln61_259_fu_3561_p3                          |     |        | select_ln61_259 | select    | auto_sel                 | 0       |
+|     select_ln61_260_fu_3569_p3                          |     |        | select_ln61_260 | select    | auto_sel                 | 0       |
+|     select_ln61_261_fu_3577_p3                          |     |        | select_ln61_261 | select    | auto_sel                 | 0       |
+|     select_ln61_262_fu_3585_p3                          |     |        | select_ln61_262 | select    | auto_sel                 | 0       |
+|     select_ln61_263_fu_3593_p3                          |     |        | select_ln61_263 | select    | auto_sel                 | 0       |
+|     select_ln61_264_fu_3601_p3                          |     |        | select_ln61_264 | select    | auto_sel                 | 0       |
+|     select_ln61_265_fu_3609_p3                          |     |        | select_ln61_265 | select    | auto_sel                 | 0       |
+|     select_ln61_266_fu_3617_p3                          |     |        | select_ln61_266 | select    | auto_sel                 | 0       |
+|     select_ln61_267_fu_3625_p3                          |     |        | select_ln61_267 | select    | auto_sel                 | 0       |
+|     select_ln61_268_fu_3633_p3                          |     |        | select_ln61_268 | select    | auto_sel                 | 0       |
+|     select_ln61_269_fu_3641_p3                          |     |        | select_ln61_269 | select    | auto_sel                 | 0       |
+|     select_ln61_270_fu_3686_p3                          |     |        | select_ln61_270 | select    | auto_sel                 | 0       |
+|     select_ln61_271_fu_3694_p3                          |     |        | select_ln61_271 | select    | auto_sel                 | 0       |
+|     select_ln61_272_fu_3702_p3                          |     |        | select_ln61_272 | select    | auto_sel                 | 0       |
+|     select_ln61_273_fu_3710_p3                          |     |        | select_ln61_273 | select    | auto_sel                 | 0       |
+|     select_ln61_274_fu_3718_p3                          |     |        | select_ln61_274 | select    | auto_sel                 | 0       |
+|     select_ln61_275_fu_3726_p3                          |     |        | select_ln61_275 | select    | auto_sel                 | 0       |
+|     select_ln61_276_fu_3734_p3                          |     |        | select_ln61_276 | select    | auto_sel                 | 0       |
+|     select_ln61_277_fu_3742_p3                          |     |        | select_ln61_277 | select    | auto_sel                 | 0       |
+|     select_ln61_278_fu_3750_p3                          |     |        | select_ln61_278 | select    | auto_sel                 | 0       |
+|     select_ln61_279_fu_3758_p3                          |     |        | select_ln61_279 | select    | auto_sel                 | 0       |
+|     select_ln61_280_fu_3766_p3                          |     |        | select_ln61_280 | select    | auto_sel                 | 0       |
+|     select_ln61_281_fu_3774_p3                          |     |        | select_ln61_281 | select    | auto_sel                 | 0       |
+|     select_ln61_282_fu_3782_p3                          |     |        | select_ln61_282 | select    | auto_sel                 | 0       |
+|     select_ln61_283_fu_3790_p3                          |     |        | select_ln61_283 | select    | auto_sel                 | 0       |
+|     select_ln61_284_fu_3798_p3                          |     |        | select_ln61_284 | select    | auto_sel                 | 0       |
+|     select_ln61_285_fu_3806_p3                          |     |        | select_ln61_285 | select    | auto_sel                 | 0       |
+|     select_ln61_286_fu_3814_p3                          |     |        | select_ln61_286 | select    | auto_sel                 | 0       |
+|     select_ln61_287_fu_3822_p3                          |     |        | select_ln61_287 | select    | auto_sel                 | 0       |
+|     select_ln61_288_fu_3830_p3                          |     |        | select_ln61_288 | select    | auto_sel                 | 0       |
+|     select_ln61_289_fu_3838_p3                          |     |        | select_ln61_289 | select    | auto_sel                 | 0       |
+|     select_ln61_290_fu_3846_p3                          |     |        | select_ln61_290 | select    | auto_sel                 | 0       |
+|     select_ln61_291_fu_3854_p3                          |     |        | select_ln61_291 | select    | auto_sel                 | 0       |
+|     select_ln61_292_fu_3862_p3                          |     |        | select_ln61_292 | select    | auto_sel                 | 0       |
+|     select_ln61_293_fu_3870_p3                          |     |        | select_ln61_293 | select    | auto_sel                 | 0       |
+|     select_ln61_294_fu_3878_p3                          |     |        | select_ln61_294 | select    | auto_sel                 | 0       |
+|     select_ln61_295_fu_3886_p3                          |     |        | select_ln61_295 | select    | auto_sel                 | 0       |
+|     select_ln61_296_fu_3894_p3                          |     |        | select_ln61_296 | select    | auto_sel                 | 0       |
+|     select_ln61_297_fu_3902_p3                          |     |        | select_ln61_297 | select    | auto_sel                 | 0       |
+|     select_ln61_298_fu_3910_p3                          |     |        | select_ln61_298 | select    | auto_sel                 | 0       |
+|     select_ln61_299_fu_3918_p3                          |     |        | select_ln61_299 | select    | auto_sel                 | 0       |
+|     select_ln61_300_fu_3926_p3                          |     |        | select_ln61_300 | select    | auto_sel                 | 0       |
+|     select_ln61_301_fu_3934_p3                          |     |        | select_ln61_301 | select    | auto_sel                 | 0       |
+|     select_ln61_302_fu_3979_p3                          |     |        | select_ln61_302 | select    | auto_sel                 | 0       |
+|     select_ln61_303_fu_3987_p3                          |     |        | select_ln61_303 | select    | auto_sel                 | 0       |
+|     select_ln61_304_fu_3995_p3                          |     |        | select_ln61_304 | select    | auto_sel                 | 0       |
+|     select_ln61_305_fu_4003_p3                          |     |        | select_ln61_305 | select    | auto_sel                 | 0       |
+|     select_ln61_306_fu_4011_p3                          |     |        | select_ln61_306 | select    | auto_sel                 | 0       |
+|     select_ln61_307_fu_4019_p3                          |     |        | select_ln61_307 | select    | auto_sel                 | 0       |
+|     select_ln61_308_fu_4027_p3                          |     |        | select_ln61_308 | select    | auto_sel                 | 0       |
+|     select_ln61_309_fu_4035_p3                          |     |        | select_ln61_309 | select    | auto_sel                 | 0       |
+|     select_ln61_310_fu_4043_p3                          |     |        | select_ln61_310 | select    | auto_sel                 | 0       |
+|     select_ln61_311_fu_4051_p3                          |     |        | select_ln61_311 | select    | auto_sel                 | 0       |
+|     select_ln61_312_fu_4059_p3                          |     |        | select_ln61_312 | select    | auto_sel                 | 0       |
+|     select_ln61_313_fu_4067_p3                          |     |        | select_ln61_313 | select    | auto_sel                 | 0       |
+|     select_ln61_314_fu_4075_p3                          |     |        | select_ln61_314 | select    | auto_sel                 | 0       |
+|     select_ln61_315_fu_4083_p3                          |     |        | select_ln61_315 | select    | auto_sel                 | 0       |
+|     select_ln61_316_fu_4091_p3                          |     |        | select_ln61_316 | select    | auto_sel                 | 0       |
+|     select_ln61_317_fu_4099_p3                          |     |        | select_ln61_317 | select    | auto_sel                 | 0       |
+|     select_ln61_318_fu_4107_p3                          |     |        | select_ln61_318 | select    | auto_sel                 | 0       |
+|     select_ln61_319_fu_4115_p3                          |     |        | select_ln61_319 | select    | auto_sel                 | 0       |
+|     select_ln61_320_fu_4123_p3                          |     |        | select_ln61_320 | select    | auto_sel                 | 0       |
+|     select_ln61_321_fu_4131_p3                          |     |        | select_ln61_321 | select    | auto_sel                 | 0       |
+|     select_ln61_322_fu_4139_p3                          |     |        | select_ln61_322 | select    | auto_sel                 | 0       |
+|     select_ln61_323_fu_4147_p3                          |     |        | select_ln61_323 | select    | auto_sel                 | 0       |
+|     select_ln61_324_fu_4155_p3                          |     |        | select_ln61_324 | select    | auto_sel                 | 0       |
+|     select_ln61_325_fu_4163_p3                          |     |        | select_ln61_325 | select    | auto_sel                 | 0       |
+|     select_ln61_326_fu_4171_p3                          |     |        | select_ln61_326 | select    | auto_sel                 | 0       |
+|     select_ln61_327_fu_4179_p3                          |     |        | select_ln61_327 | select    | auto_sel                 | 0       |
+|     select_ln61_328_fu_4187_p3                          |     |        | select_ln61_328 | select    | auto_sel                 | 0       |
+|     select_ln61_329_fu_4195_p3                          |     |        | select_ln61_329 | select    | auto_sel                 | 0       |
+|     select_ln61_330_fu_4203_p3                          |     |        | select_ln61_330 | select    | auto_sel                 | 0       |
+|     select_ln61_331_fu_4211_p3                          |     |        | select_ln61_331 | select    | auto_sel                 | 0       |
+|     select_ln61_332_fu_4219_p3                          |     |        | select_ln61_332 | select    | auto_sel                 | 0       |
+|     select_ln61_333_fu_4227_p3                          |     |        | select_ln61_333 | select    | auto_sel                 | 0       |
+|     select_ln61_334_fu_4272_p3                          |     |        | select_ln61_334 | select    | auto_sel                 | 0       |
+|     select_ln61_335_fu_4280_p3                          |     |        | select_ln61_335 | select    | auto_sel                 | 0       |
+|     select_ln61_336_fu_4288_p3                          |     |        | select_ln61_336 | select    | auto_sel                 | 0       |
+|     select_ln61_337_fu_4296_p3                          |     |        | select_ln61_337 | select    | auto_sel                 | 0       |
+|     select_ln61_338_fu_4304_p3                          |     |        | select_ln61_338 | select    | auto_sel                 | 0       |
+|     select_ln61_339_fu_4312_p3                          |     |        | select_ln61_339 | select    | auto_sel                 | 0       |
+|     select_ln61_340_fu_4320_p3                          |     |        | select_ln61_340 | select    | auto_sel                 | 0       |
+|     select_ln61_341_fu_4328_p3                          |     |        | select_ln61_341 | select    | auto_sel                 | 0       |
+|     select_ln61_342_fu_4336_p3                          |     |        | select_ln61_342 | select    | auto_sel                 | 0       |
+|     select_ln61_343_fu_4344_p3                          |     |        | select_ln61_343 | select    | auto_sel                 | 0       |
+|     select_ln61_344_fu_4352_p3                          |     |        | select_ln61_344 | select    | auto_sel                 | 0       |
+|     select_ln61_345_fu_4360_p3                          |     |        | select_ln61_345 | select    | auto_sel                 | 0       |
+|     select_ln61_346_fu_4368_p3                          |     |        | select_ln61_346 | select    | auto_sel                 | 0       |
+|     select_ln61_347_fu_4376_p3                          |     |        | select_ln61_347 | select    | auto_sel                 | 0       |
+|     select_ln61_348_fu_4384_p3                          |     |        | select_ln61_348 | select    | auto_sel                 | 0       |
+|     select_ln61_349_fu_4392_p3                          |     |        | select_ln61_349 | select    | auto_sel                 | 0       |
+|     select_ln61_350_fu_4400_p3                          |     |        | select_ln61_350 | select    | auto_sel                 | 0       |
+|     select_ln61_351_fu_4408_p3                          |     |        | select_ln61_351 | select    | auto_sel                 | 0       |
+|     select_ln61_352_fu_4416_p3                          |     |        | select_ln61_352 | select    | auto_sel                 | 0       |
+|     select_ln61_353_fu_4424_p3                          |     |        | select_ln61_353 | select    | auto_sel                 | 0       |
+|     select_ln61_354_fu_4432_p3                          |     |        | select_ln61_354 | select    | auto_sel                 | 0       |
+|     select_ln61_355_fu_4440_p3                          |     |        | select_ln61_355 | select    | auto_sel                 | 0       |
+|     select_ln61_356_fu_4448_p3                          |     |        | select_ln61_356 | select    | auto_sel                 | 0       |
+|     select_ln61_357_fu_4456_p3                          |     |        | select_ln61_357 | select    | auto_sel                 | 0       |
+|     select_ln61_358_fu_4464_p3                          |     |        | select_ln61_358 | select    | auto_sel                 | 0       |
+|     select_ln61_359_fu_4472_p3                          |     |        | select_ln61_359 | select    | auto_sel                 | 0       |
+|     select_ln61_360_fu_4480_p3                          |     |        | select_ln61_360 | select    | auto_sel                 | 0       |
+|     select_ln61_361_fu_4488_p3                          |     |        | select_ln61_361 | select    | auto_sel                 | 0       |
+|     select_ln61_362_fu_4496_p3                          |     |        | select_ln61_362 | select    | auto_sel                 | 0       |
+|     select_ln61_363_fu_4504_p3                          |     |        | select_ln61_363 | select    | auto_sel                 | 0       |
+|     select_ln61_364_fu_4512_p3                          |     |        | select_ln61_364 | select    | auto_sel                 | 0       |
+|     select_ln61_365_fu_4520_p3                          |     |        | select_ln61_365 | select    | auto_sel                 | 0       |
+|     select_ln61_366_fu_4565_p3                          |     |        | select_ln61_366 | select    | auto_sel                 | 0       |
+|     select_ln61_367_fu_4573_p3                          |     |        | select_ln61_367 | select    | auto_sel                 | 0       |
+|     select_ln61_368_fu_4581_p3                          |     |        | select_ln61_368 | select    | auto_sel                 | 0       |
+|     select_ln61_369_fu_4589_p3                          |     |        | select_ln61_369 | select    | auto_sel                 | 0       |
+|     select_ln61_370_fu_4597_p3                          |     |        | select_ln61_370 | select    | auto_sel                 | 0       |
+|     select_ln61_371_fu_4605_p3                          |     |        | select_ln61_371 | select    | auto_sel                 | 0       |
+|     select_ln61_372_fu_4613_p3                          |     |        | select_ln61_372 | select    | auto_sel                 | 0       |
+|     select_ln61_373_fu_4621_p3                          |     |        | select_ln61_373 | select    | auto_sel                 | 0       |
+|     select_ln61_374_fu_4629_p3                          |     |        | select_ln61_374 | select    | auto_sel                 | 0       |
+|     select_ln61_375_fu_4637_p3                          |     |        | select_ln61_375 | select    | auto_sel                 | 0       |
+|     select_ln61_376_fu_4645_p3                          |     |        | select_ln61_376 | select    | auto_sel                 | 0       |
+|     select_ln61_377_fu_4653_p3                          |     |        | select_ln61_377 | select    | auto_sel                 | 0       |
+|     select_ln61_378_fu_4661_p3                          |     |        | select_ln61_378 | select    | auto_sel                 | 0       |
+|     select_ln61_379_fu_4669_p3                          |     |        | select_ln61_379 | select    | auto_sel                 | 0       |
+|     select_ln61_380_fu_4677_p3                          |     |        | select_ln61_380 | select    | auto_sel                 | 0       |
+|     select_ln61_381_fu_4685_p3                          |     |        | select_ln61_381 | select    | auto_sel                 | 0       |
+|     select_ln61_382_fu_4693_p3                          |     |        | select_ln61_382 | select    | auto_sel                 | 0       |
+|     select_ln61_383_fu_4701_p3                          |     |        | select_ln61_383 | select    | auto_sel                 | 0       |
+|     select_ln61_384_fu_4709_p3                          |     |        | select_ln61_384 | select    | auto_sel                 | 0       |
+|     select_ln61_385_fu_4717_p3                          |     |        | select_ln61_385 | select    | auto_sel                 | 0       |
+|     select_ln61_386_fu_4725_p3                          |     |        | select_ln61_386 | select    | auto_sel                 | 0       |
+|     select_ln61_387_fu_4733_p3                          |     |        | select_ln61_387 | select    | auto_sel                 | 0       |
+|     select_ln61_388_fu_4741_p3                          |     |        | select_ln61_388 | select    | auto_sel                 | 0       |
+|     select_ln61_389_fu_4749_p3                          |     |        | select_ln61_389 | select    | auto_sel                 | 0       |
+|     select_ln61_390_fu_4757_p3                          |     |        | select_ln61_390 | select    | auto_sel                 | 0       |
+|     select_ln61_391_fu_4765_p3                          |     |        | select_ln61_391 | select    | auto_sel                 | 0       |
+|     select_ln61_392_fu_4773_p3                          |     |        | select_ln61_392 | select    | auto_sel                 | 0       |
+|     select_ln61_393_fu_4781_p3                          |     |        | select_ln61_393 | select    | auto_sel                 | 0       |
+|     select_ln61_394_fu_4789_p3                          |     |        | select_ln61_394 | select    | auto_sel                 | 0       |
+|     select_ln61_395_fu_4797_p3                          |     |        | select_ln61_395 | select    | auto_sel                 | 0       |
+|     select_ln61_396_fu_4805_p3                          |     |        | select_ln61_396 | select    | auto_sel                 | 0       |
+|     select_ln61_397_fu_4850_p3                          |     |        | select_ln61_397 | select    | auto_sel                 | 0       |
+|     select_ln61_398_fu_4858_p3                          |     |        | select_ln61_398 | select    | auto_sel                 | 0       |
+|     select_ln61_399_fu_4866_p3                          |     |        | select_ln61_399 | select    | auto_sel                 | 0       |
+|     select_ln61_400_fu_4874_p3                          |     |        | select_ln61_400 | select    | auto_sel                 | 0       |
+|     select_ln61_401_fu_4882_p3                          |     |        | select_ln61_401 | select    | auto_sel                 | 0       |
+|     select_ln61_402_fu_4890_p3                          |     |        | select_ln61_402 | select    | auto_sel                 | 0       |
+|     select_ln61_403_fu_4898_p3                          |     |        | select_ln61_403 | select    | auto_sel                 | 0       |
+|     select_ln61_404_fu_4906_p3                          |     |        | select_ln61_404 | select    | auto_sel                 | 0       |
+|     select_ln61_405_fu_4914_p3                          |     |        | select_ln61_405 | select    | auto_sel                 | 0       |
+|     select_ln61_406_fu_4922_p3                          |     |        | select_ln61_406 | select    | auto_sel                 | 0       |
+|     select_ln61_407_fu_4930_p3                          |     |        | select_ln61_407 | select    | auto_sel                 | 0       |
+|     select_ln61_408_fu_4938_p3                          |     |        | select_ln61_408 | select    | auto_sel                 | 0       |
+|     select_ln61_409_fu_4946_p3                          |     |        | select_ln61_409 | select    | auto_sel                 | 0       |
+|     select_ln61_410_fu_4954_p3                          |     |        | select_ln61_410 | select    | auto_sel                 | 0       |
+|     select_ln61_411_fu_4962_p3                          |     |        | select_ln61_411 | select    | auto_sel                 | 0       |
+|     select_ln61_412_fu_4970_p3                          |     |        | select_ln61_412 | select    | auto_sel                 | 0       |
+|     select_ln61_413_fu_5015_p3                          |     |        | select_ln61_413 | select    | auto_sel                 | 0       |
+|     select_ln61_414_fu_5023_p3                          |     |        | select_ln61_414 | select    | auto_sel                 | 0       |
+|     select_ln61_415_fu_5031_p3                          |     |        | select_ln61_415 | select    | auto_sel                 | 0       |
+|     select_ln61_416_fu_5039_p3                          |     |        | select_ln61_416 | select    | auto_sel                 | 0       |
+|     select_ln61_417_fu_5047_p3                          |     |        | select_ln61_417 | select    | auto_sel                 | 0       |
+|     select_ln61_418_fu_5055_p3                          |     |        | select_ln61_418 | select    | auto_sel                 | 0       |
+|     select_ln61_419_fu_5063_p3                          |     |        | select_ln61_419 | select    | auto_sel                 | 0       |
+|     select_ln61_420_fu_5071_p3                          |     |        | select_ln61_420 | select    | auto_sel                 | 0       |
+|     select_ln61_421_fu_5079_p3                          |     |        | select_ln61_421 | select    | auto_sel                 | 0       |
+|     select_ln61_422_fu_5087_p3                          |     |        | select_ln61_422 | select    | auto_sel                 | 0       |
+|     select_ln61_423_fu_5095_p3                          |     |        | select_ln61_423 | select    | auto_sel                 | 0       |
+|     select_ln61_424_fu_5103_p3                          |     |        | select_ln61_424 | select    | auto_sel                 | 0       |
+|     select_ln61_425_fu_5111_p3                          |     |        | select_ln61_425 | select    | auto_sel                 | 0       |
+|     select_ln61_426_fu_5119_p3                          |     |        | select_ln61_426 | select    | auto_sel                 | 0       |
+|     select_ln61_427_fu_5127_p3                          |     |        | select_ln61_427 | select    | auto_sel                 | 0       |
+|     select_ln61_428_fu_5135_p3                          |     |        | select_ln61_428 | select    | auto_sel                 | 0       |
+|     select_ln61_429_fu_5180_p3                          |     |        | select_ln61_429 | select    | auto_sel                 | 0       |
+|     select_ln61_430_fu_5188_p3                          |     |        | select_ln61_430 | select    | auto_sel                 | 0       |
+|     select_ln61_431_fu_5196_p3                          |     |        | select_ln61_431 | select    | auto_sel                 | 0       |
+|     select_ln61_432_fu_5204_p3                          |     |        | select_ln61_432 | select    | auto_sel                 | 0       |
+|     select_ln61_433_fu_5212_p3                          |     |        | select_ln61_433 | select    | auto_sel                 | 0       |
+|     select_ln61_434_fu_5220_p3                          |     |        | select_ln61_434 | select    | auto_sel                 | 0       |
+|     select_ln61_435_fu_5228_p3                          |     |        | select_ln61_435 | select    | auto_sel                 | 0       |
+|     select_ln61_436_fu_5236_p3                          |     |        | select_ln61_436 | select    | auto_sel                 | 0       |
+|     select_ln61_437_fu_5244_p3                          |     |        | select_ln61_437 | select    | auto_sel                 | 0       |
+|     select_ln61_438_fu_5252_p3                          |     |        | select_ln61_438 | select    | auto_sel                 | 0       |
+|     select_ln61_439_fu_5260_p3                          |     |        | select_ln61_439 | select    | auto_sel                 | 0       |
+|     select_ln61_440_fu_5268_p3                          |     |        | select_ln61_440 | select    | auto_sel                 | 0       |
+|     select_ln61_441_fu_5276_p3                          |     |        | select_ln61_441 | select    | auto_sel                 | 0       |
+|     select_ln61_442_fu_5284_p3                          |     |        | select_ln61_442 | select    | auto_sel                 | 0       |
+|     select_ln61_443_fu_5292_p3                          |     |        | select_ln61_443 | select    | auto_sel                 | 0       |
+|     select_ln61_444_fu_5300_p3                          |     |        | select_ln61_444 | select    | auto_sel                 | 0       |
+|     select_ln61_445_fu_5345_p3                          |     |        | select_ln61_445 | select    | auto_sel                 | 0       |
+|     select_ln61_446_fu_5353_p3                          |     |        | select_ln61_446 | select    | auto_sel                 | 0       |
+|     select_ln61_447_fu_5361_p3                          |     |        | select_ln61_447 | select    | auto_sel                 | 0       |
+|     select_ln61_448_fu_5369_p3                          |     |        | select_ln61_448 | select    | auto_sel                 | 0       |
+|     select_ln61_449_fu_5377_p3                          |     |        | select_ln61_449 | select    | auto_sel                 | 0       |
+|     select_ln61_450_fu_5385_p3                          |     |        | select_ln61_450 | select    | auto_sel                 | 0       |
+|     select_ln61_451_fu_5393_p3                          |     |        | select_ln61_451 | select    | auto_sel                 | 0       |
+|     select_ln61_452_fu_5401_p3                          |     |        | select_ln61_452 | select    | auto_sel                 | 0       |
+|     select_ln61_453_fu_5409_p3                          |     |        | select_ln61_453 | select    | auto_sel                 | 0       |
+|     select_ln61_454_fu_5417_p3                          |     |        | select_ln61_454 | select    | auto_sel                 | 0       |
+|     select_ln61_455_fu_5425_p3                          |     |        | select_ln61_455 | select    | auto_sel                 | 0       |
+|     select_ln61_456_fu_5433_p3                          |     |        | select_ln61_456 | select    | auto_sel                 | 0       |
+|     select_ln61_457_fu_5441_p3                          |     |        | select_ln61_457 | select    | auto_sel                 | 0       |
+|     select_ln61_458_fu_5449_p3                          |     |        | select_ln61_458 | select    | auto_sel                 | 0       |
+|     select_ln61_459_fu_5457_p3                          |     |        | select_ln61_459 | select    | auto_sel                 | 0       |
+|     select_ln61_460_fu_5465_p3                          |     |        | select_ln61_460 | select    | auto_sel                 | 0       |
+|     select_ln61_461_fu_5510_p3                          |     |        | select_ln61_461 | select    | auto_sel                 | 0       |
+|     select_ln61_462_fu_5518_p3                          |     |        | select_ln61_462 | select    | auto_sel                 | 0       |
+|     select_ln61_463_fu_5526_p3                          |     |        | select_ln61_463 | select    | auto_sel                 | 0       |
+|     select_ln61_464_fu_5534_p3                          |     |        | select_ln61_464 | select    | auto_sel                 | 0       |
+|     select_ln61_465_fu_5542_p3                          |     |        | select_ln61_465 | select    | auto_sel                 | 0       |
+|     select_ln61_466_fu_5550_p3                          |     |        | select_ln61_466 | select    | auto_sel                 | 0       |
+|     select_ln61_467_fu_5558_p3                          |     |        | select_ln61_467 | select    | auto_sel                 | 0       |
+|     select_ln61_468_fu_5566_p3                          |     |        | select_ln61_468 | select    | auto_sel                 | 0       |
+|     select_ln61_469_fu_5574_p3                          |     |        | select_ln61_469 | select    | auto_sel                 | 0       |
+|     select_ln61_470_fu_5582_p3                          |     |        | select_ln61_470 | select    | auto_sel                 | 0       |
+|     select_ln61_471_fu_5590_p3                          |     |        | select_ln61_471 | select    | auto_sel                 | 0       |
+|     select_ln61_472_fu_5598_p3                          |     |        | select_ln61_472 | select    | auto_sel                 | 0       |
+|     select_ln61_473_fu_5606_p3                          |     |        | select_ln61_473 | select    | auto_sel                 | 0       |
+|     select_ln61_474_fu_5614_p3                          |     |        | select_ln61_474 | select    | auto_sel                 | 0       |
+|     select_ln61_475_fu_5622_p3                          |     |        | select_ln61_475 | select    | auto_sel                 | 0       |
+|     select_ln61_476_fu_5679_p3                          |     |        | select_ln61_476 | select    | auto_sel                 | 0       |
+|    + p_anonymous_namespace_ops_layout_1_Pipeline_PASS   | 0   |        |                 |           |                          |         |
+|      icmp_ln27_fu_74_p2                                 |     |        | icmp_ln27       | setlt     | auto                     | 0       |
+|      add_ln27_fu_80_p2                                  |     |        | add_ln27        | add       | fabric                   | 0       |
+|    + p_anonymous_namespace_ops_layout_1_Pipeline_GATHER | 0   |        |                 |           |                          |         |
+|      icmp_ln40_fu_88_p2                                 |     |        | icmp_ln40       | seteq     | auto                     | 0       |
+|      i_4_fu_94_p2                                       |     |        | i_4             | add       | fabric                   | 0       |
+|    + p_anonymous_namespace_ops_layout_1_Pipeline_EMIT   | 0   |        |                 |           |                          |         |
+|      icmp_ln65_fu_265_p2                                |     |        | icmp_ln65       | seteq     | auto                     | 0       |
+|      add_ln65_fu_271_p2                                 |     |        | add_ln65        | add       | fabric                   | 0       |
+|      sparsemux_41_5_128_1_1_U19                         |     |        | p_0             | sparsemux | compactencoding_dontcare | 0       |
+|   + p_anonymous_namespace_ops_layout                    | 0   |        |                 |           |                          |         |
+|     add_ln27_fu_149_p2                                  |     |        | add_ln27        | add       | fabric                   | 0       |
+|     icmp_ln36_fu_168_p2                                 |     |        | icmp_ln36       | setlt     | auto                     | 0       |
+|     add_ln36_fu_173_p2                                  |     |        | add_ln36        | add       | fabric                   | 0       |
+|    + p_anonymous_namespace_ops_layout_Pipeline_PASS     | 0   |        |                 |           |                          |         |
+|      icmp_ln27_fu_74_p2                                 |     |        | icmp_ln27       | setlt     | auto                     | 0       |
+|      add_ln27_fu_80_p2                                  |     |        | add_ln27        | add       | fabric                   | 0       |
+|    + p_anonymous_namespace_ops_layout_Pipeline_GATHER   | 0   |        |                 |           |                          |         |
+|      icmp_ln40_fu_78_p2                                 |     |        | icmp_ln40       | seteq     | auto                     | 0       |
+|      i_2_fu_84_p2                                       |     |        | i_2             | add       | fabric                   | 0       |
+|    + p_anonymous_namespace_ops_layout_Pipeline_EMIT     | 0   |        |                 |           |                          |         |
+|      icmp_ln65_fu_103_p2                                |     |        | icmp_ln65       | seteq     | auto                     | 0       |
+|      add_ln65_fu_109_p2                                 |     |        | add_ln65        | add       | fabric                   | 0       |
+|      sparsemux_11_3_128_1_1_U61                         |     |        | p_0             | sparsemux | compactencoding_dontcare | 0       |
+|   + p_anonymous_namespace_ops_calc                      | 19  |        |                 |           |                          |         |
+|     mul_32s_32s_32_2_1_U97                              | 3   |        | mul_ln78        | mul       | auto                     | 1       |
+|    + p_anonymous_namespace_ops_calc_Pipeline_CALC       | 16  |        |                 |           |                          |         |
+|      icmp_ln78_fu_207_p2                                |     |        | icmp_ln78       | setlt     | auto                     | 0       |
+|      add_ln78_fu_213_p2                                 |     |        | add_ln78        | add       | fabric                   | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U73                 | 1   |        | mul_ln91        | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U73                 | 1   |        | zext_ln91_2     | zext      | dsp_slice                | 3       |
+|      add_ln91_fu_487_p2                                 |     |        | add_ln91        | add       | fabric                   | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U73                 | 1   |        | m               | add       | dsp_slice                | 3       |
+|      r_fu_518_p2                                        |     |        | r               | add       | fabric                   | 0       |
+|      icmp_ln93_fu_542_p2                                |     |        | icmp_ln93       | setgt     | auto                     | 0       |
+|      xor_ln93_fu_552_p2                                 |     |        | xor_ln93        | xor       | auto                     | 0       |
+|      select_ln93_16_fu_558_p3                           |     |        | select_ln93_16  | select    | auto_sel                 | 0       |
+|      or_ln93_fu_566_p2                                  |     |        | or_ln93         | or        | auto                     | 0       |
+|      select_ln93_fu_572_p3                              |     |        | select_ln93     | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U74                 | 1   |        | mul_ln91_1      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U74                 | 1   |        | zext_ln91_4     | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U74                 | 1   |        | m_1             | add       | dsp_slice                | 3       |
+|      r_3_fu_605_p2                                      |     |        | r_3             | add       | fabric                   | 0       |
+|      icmp_ln93_1_fu_629_p2                              |     |        | icmp_ln93_1     | setgt     | auto                     | 0       |
+|      xor_ln93_1_fu_639_p2                               |     |        | xor_ln93_1      | xor       | auto                     | 0       |
+|      select_ln93_17_fu_645_p3                           |     |        | select_ln93_17  | select    | auto_sel                 | 0       |
+|      or_ln93_1_fu_653_p2                                |     |        | or_ln93_1       | or        | auto                     | 0       |
+|      select_ln93_1_fu_659_p3                            |     |        | select_ln93_1   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U75                 | 1   |        | mul_ln91_2      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U75                 | 1   |        | zext_ln91_6     | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U75                 | 1   |        | m_2             | add       | dsp_slice                | 3       |
+|      r_4_fu_692_p2                                      |     |        | r_4             | add       | fabric                   | 0       |
+|      icmp_ln93_2_fu_716_p2                              |     |        | icmp_ln93_2     | setgt     | auto                     | 0       |
+|      xor_ln93_2_fu_726_p2                               |     |        | xor_ln93_2      | xor       | auto                     | 0       |
+|      select_ln93_18_fu_732_p3                           |     |        | select_ln93_18  | select    | auto_sel                 | 0       |
+|      or_ln93_2_fu_740_p2                                |     |        | or_ln93_2       | or        | auto                     | 0       |
+|      select_ln93_2_fu_746_p3                            |     |        | select_ln93_2   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U76                 | 1   |        | mul_ln91_3      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U76                 | 1   |        | zext_ln91_8     | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U76                 | 1   |        | m_3             | add       | dsp_slice                | 3       |
+|      r_5_fu_779_p2                                      |     |        | r_5             | add       | fabric                   | 0       |
+|      icmp_ln93_3_fu_803_p2                              |     |        | icmp_ln93_3     | setgt     | auto                     | 0       |
+|      xor_ln93_3_fu_813_p2                               |     |        | xor_ln93_3      | xor       | auto                     | 0       |
+|      select_ln93_19_fu_819_p3                           |     |        | select_ln93_19  | select    | auto_sel                 | 0       |
+|      or_ln93_3_fu_827_p2                                |     |        | or_ln93_3       | or        | auto                     | 0       |
+|      select_ln93_3_fu_833_p3                            |     |        | select_ln93_3   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U77                 | 1   |        | mul_ln91_4      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U77                 | 1   |        | zext_ln91_10    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U77                 | 1   |        | m_4             | add       | dsp_slice                | 3       |
+|      r_6_fu_866_p2                                      |     |        | r_6             | add       | fabric                   | 0       |
+|      icmp_ln93_4_fu_890_p2                              |     |        | icmp_ln93_4     | setgt     | auto                     | 0       |
+|      xor_ln93_4_fu_900_p2                               |     |        | xor_ln93_4      | xor       | auto                     | 0       |
+|      select_ln93_20_fu_906_p3                           |     |        | select_ln93_20  | select    | auto_sel                 | 0       |
+|      or_ln93_4_fu_914_p2                                |     |        | or_ln93_4       | or        | auto                     | 0       |
+|      select_ln93_4_fu_920_p3                            |     |        | select_ln93_4   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U78                 | 1   |        | mul_ln91_5      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U78                 | 1   |        | zext_ln91_12    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U78                 | 1   |        | m_5             | add       | dsp_slice                | 3       |
+|      r_7_fu_953_p2                                      |     |        | r_7             | add       | fabric                   | 0       |
+|      icmp_ln93_5_fu_977_p2                              |     |        | icmp_ln93_5     | setgt     | auto                     | 0       |
+|      xor_ln93_5_fu_987_p2                               |     |        | xor_ln93_5      | xor       | auto                     | 0       |
+|      select_ln93_21_fu_993_p3                           |     |        | select_ln93_21  | select    | auto_sel                 | 0       |
+|      or_ln93_5_fu_1001_p2                               |     |        | or_ln93_5       | or        | auto                     | 0       |
+|      select_ln93_5_fu_1007_p3                           |     |        | select_ln93_5   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U79                 | 1   |        | mul_ln91_6      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U79                 | 1   |        | zext_ln91_14    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U79                 | 1   |        | m_6             | add       | dsp_slice                | 3       |
+|      r_8_fu_1040_p2                                     |     |        | r_8             | add       | fabric                   | 0       |
+|      icmp_ln93_6_fu_1064_p2                             |     |        | icmp_ln93_6     | setgt     | auto                     | 0       |
+|      xor_ln93_6_fu_1074_p2                              |     |        | xor_ln93_6      | xor       | auto                     | 0       |
+|      select_ln93_22_fu_1080_p3                          |     |        | select_ln93_22  | select    | auto_sel                 | 0       |
+|      or_ln93_6_fu_1088_p2                               |     |        | or_ln93_6       | or        | auto                     | 0       |
+|      select_ln93_6_fu_1094_p3                           |     |        | select_ln93_6   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U80                 | 1   |        | mul_ln91_7      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U80                 | 1   |        | zext_ln91_16    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U80                 | 1   |        | m_7             | add       | dsp_slice                | 3       |
+|      r_9_fu_1127_p2                                     |     |        | r_9             | add       | fabric                   | 0       |
+|      icmp_ln93_7_fu_1151_p2                             |     |        | icmp_ln93_7     | setgt     | auto                     | 0       |
+|      xor_ln93_7_fu_1161_p2                              |     |        | xor_ln93_7      | xor       | auto                     | 0       |
+|      select_ln93_23_fu_1167_p3                          |     |        | select_ln93_23  | select    | auto_sel                 | 0       |
+|      or_ln93_7_fu_1175_p2                               |     |        | or_ln93_7       | or        | auto                     | 0       |
+|      select_ln93_7_fu_1181_p3                           |     |        | select_ln93_7   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U81                 | 1   |        | mul_ln91_8      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U81                 | 1   |        | zext_ln91_18    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U81                 | 1   |        | m_8             | add       | dsp_slice                | 3       |
+|      r_10_fu_1214_p2                                    |     |        | r_10            | add       | fabric                   | 0       |
+|      icmp_ln93_8_fu_1238_p2                             |     |        | icmp_ln93_8     | setgt     | auto                     | 0       |
+|      xor_ln93_8_fu_1248_p2                              |     |        | xor_ln93_8      | xor       | auto                     | 0       |
+|      select_ln93_24_fu_1254_p3                          |     |        | select_ln93_24  | select    | auto_sel                 | 0       |
+|      or_ln93_8_fu_1262_p2                               |     |        | or_ln93_8       | or        | auto                     | 0       |
+|      select_ln93_8_fu_1268_p3                           |     |        | select_ln93_8   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U82                 | 1   |        | mul_ln91_9      | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U82                 | 1   |        | zext_ln91_20    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U82                 | 1   |        | m_9             | add       | dsp_slice                | 3       |
+|      r_11_fu_1301_p2                                    |     |        | r_11            | add       | fabric                   | 0       |
+|      icmp_ln93_9_fu_1325_p2                             |     |        | icmp_ln93_9     | setgt     | auto                     | 0       |
+|      xor_ln93_9_fu_1335_p2                              |     |        | xor_ln93_9      | xor       | auto                     | 0       |
+|      select_ln93_25_fu_1341_p3                          |     |        | select_ln93_25  | select    | auto_sel                 | 0       |
+|      or_ln93_9_fu_1349_p2                               |     |        | or_ln93_9       | or        | auto                     | 0       |
+|      select_ln93_9_fu_1355_p3                           |     |        | select_ln93_9   | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U83                 | 1   |        | mul_ln91_10     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U83                 | 1   |        | zext_ln91_22    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U83                 | 1   |        | m_10            | add       | dsp_slice                | 3       |
+|      r_12_fu_1388_p2                                    |     |        | r_12            | add       | fabric                   | 0       |
+|      icmp_ln93_10_fu_1412_p2                            |     |        | icmp_ln93_10    | setgt     | auto                     | 0       |
+|      xor_ln93_10_fu_1422_p2                             |     |        | xor_ln93_10     | xor       | auto                     | 0       |
+|      select_ln93_26_fu_1428_p3                          |     |        | select_ln93_26  | select    | auto_sel                 | 0       |
+|      or_ln93_10_fu_1436_p2                              |     |        | or_ln93_10      | or        | auto                     | 0       |
+|      select_ln93_10_fu_1442_p3                          |     |        | select_ln93_10  | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U84                 | 1   |        | mul_ln91_11     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U84                 | 1   |        | zext_ln91_24    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U84                 | 1   |        | m_11            | add       | dsp_slice                | 3       |
+|      r_13_fu_1475_p2                                    |     |        | r_13            | add       | fabric                   | 0       |
+|      icmp_ln93_11_fu_1499_p2                            |     |        | icmp_ln93_11    | setgt     | auto                     | 0       |
+|      xor_ln93_11_fu_1509_p2                             |     |        | xor_ln93_11     | xor       | auto                     | 0       |
+|      select_ln93_27_fu_1515_p3                          |     |        | select_ln93_27  | select    | auto_sel                 | 0       |
+|      or_ln93_11_fu_1523_p2                              |     |        | or_ln93_11      | or        | auto                     | 0       |
+|      select_ln93_11_fu_1529_p3                          |     |        | select_ln93_11  | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U85                 | 1   |        | mul_ln91_12     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U85                 | 1   |        | zext_ln91_26    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U85                 | 1   |        | m_12            | add       | dsp_slice                | 3       |
+|      r_14_fu_1562_p2                                    |     |        | r_14            | add       | fabric                   | 0       |
+|      icmp_ln93_12_fu_1586_p2                            |     |        | icmp_ln93_12    | setgt     | auto                     | 0       |
+|      xor_ln93_12_fu_1596_p2                             |     |        | xor_ln93_12     | xor       | auto                     | 0       |
+|      select_ln93_28_fu_1602_p3                          |     |        | select_ln93_28  | select    | auto_sel                 | 0       |
+|      or_ln93_12_fu_1610_p2                              |     |        | or_ln93_12      | or        | auto                     | 0       |
+|      select_ln93_12_fu_1616_p3                          |     |        | select_ln93_12  | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U86                 | 1   |        | mul_ln91_13     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U86                 | 1   |        | zext_ln91_28    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U86                 | 1   |        | m_13            | add       | dsp_slice                | 3       |
+|      r_15_fu_1649_p2                                    |     |        | r_15            | add       | fabric                   | 0       |
+|      icmp_ln93_13_fu_1673_p2                            |     |        | icmp_ln93_13    | setgt     | auto                     | 0       |
+|      xor_ln93_13_fu_1683_p2                             |     |        | xor_ln93_13     | xor       | auto                     | 0       |
+|      select_ln93_29_fu_1689_p3                          |     |        | select_ln93_29  | select    | auto_sel                 | 0       |
+|      or_ln93_13_fu_1697_p2                              |     |        | or_ln93_13      | or        | auto                     | 0       |
+|      select_ln93_13_fu_1703_p3                          |     |        | select_ln93_13  | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U87                 | 1   |        | mul_ln91_14     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U87                 | 1   |        | zext_ln91_30    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U87                 | 1   |        | m_14            | add       | dsp_slice                | 3       |
+|      r_16_fu_1736_p2                                    |     |        | r_16            | add       | fabric                   | 0       |
+|      icmp_ln93_14_fu_1760_p2                            |     |        | icmp_ln93_14    | setgt     | auto                     | 0       |
+|      xor_ln93_14_fu_1770_p2                             |     |        | xor_ln93_14     | xor       | auto                     | 0       |
+|      select_ln93_30_fu_1776_p3                          |     |        | select_ln93_30  | select    | auto_sel                 | 0       |
+|      or_ln93_14_fu_1784_p2                              |     |        | or_ln93_14      | or        | auto                     | 0       |
+|      select_ln93_14_fu_1790_p3                          |     |        | select_ln93_14  | select    | auto_sel                 | 0       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U88                 | 1   |        | mul_ln91_15     | mul       | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U88                 | 1   |        | zext_ln91_32    | zext      | dsp_slice                | 3       |
+|      mac_muladd_24ns_8ns_33s_34_4_1_U88                 | 1   |        | m_15            | add       | dsp_slice                | 3       |
+|      r_17_fu_1823_p2                                    |     |        | r_17            | add       | fabric                   | 0       |
+|      icmp_ln93_15_fu_1847_p2                            |     |        | icmp_ln93_15    | setgt     | auto                     | 0       |
+|      xor_ln93_15_fu_1857_p2                             |     |        | xor_ln93_15     | xor       | auto                     | 0       |
+|      select_ln93_31_fu_1863_p3                          |     |        | select_ln93_31  | select    | auto_sel                 | 0       |
+|      or_ln93_15_fu_1871_p2                              |     |        | or_ln93_15      | or        | auto                     | 0       |
+|      select_ln93_15_fu_1877_p3                          |     |        | select_ln93_15  | select    | auto_sel                 | 0       |
+|      w_1_fu_227_p2                                      |     |        | w_1             | add       | fabric                   | 0       |
+|      icmp_ln96_fu_233_p2                                |     |        | icmp_ln96       | seteq     | auto                     | 0       |
+|      empty_fu_262_p3                                    |     |        | empty           | select    | auto_sel                 | 0       |
+|      c_2_fu_269_p2                                      |     |        | c_2             | add       | fabric                   | 0       |
+|      w_2_fu_238_p3                                      |     |        | w_2             | select    | auto_sel                 | 0       |
+|   + p_anonymous_namespace_ops_write                     | 0   |        |                 |           |                          |         |
+|     icmp_ln102_fu_87_p2                                 |     |        | icmp_ln102      | setgt     | auto                     | 0       |
+|     empty_fu_97_p3                                      |     |        | empty           | select    | auto_sel                 | 0       |
+|    + p_anonymous_namespace_ops_write_Pipeline_WRITE     | 0   |        |                 |           |                          |         |
+|      icmp_ln102_fu_108_p2                               |     |        | icmp_ln102      | setlt     | auto                     | 0       |
+|      add_ln102_fu_114_p2                                |     |        | add_ln102       | add       | fabric                   | 0       |
++---------------------------------------------------------+-----+--------+-----------------+-----------+--------------------------+---------+
+
+
+================================================================
+== Storage Report
+================================================================
++----------------------------------+--------------+-----------+------+------+--------+--------+----------+--------+---------+------------------+
+| Name                             | Usage        | Type      | BRAM | URAM | CE_REG | Pragma | Variable | Impl   | Latency | Bitwidth, Depth, |
+|                                  |              |           |      |      |        |        |          |        |         | Banks            |
++----------------------------------+--------------+-----------+------+------+--------+--------+----------+--------+---------+------------------+
+| + y26_ops_top                    |              |           | 68   | 0    |        |        |          |        |         |                  |
+|   control_s_axi_U                | interface    | s_axilite |      |      |        |        |          |        |         |                  |
+|   gmem_opa_m_axi_U               | interface    | m_axi     | 8    |      |        |        |          |        |         |                  |
+|   gmem_opd_m_axi_U               | interface    | m_axi     | 16   |      |        |        |          |        |         |                  |
+|   pmem_U                         | ram_1p       |           | 4    |      | N      |        | pmem     | auto   | 1       | 56, 1024, 1      |
+|  + p_anonymous_namespace_ops_run |              |           | 40   | 0    |        |        |          |        |         |                  |
+|    a0_U                          | fifo channel | stream    | 8    |      | N      |        | a0       | memory | 0       | 128, 64, 1       |
+|    a1_U                          | fifo channel | stream    | 8    |      | N      |        | a1       | memory | 0       | 128, 64, 1       |
+|    b0_U                          | fifo channel | stream    | 8    |      | N      |        | b0       | memory | 0       | 128, 64, 1       |
+|    b1_U                          | fifo channel | stream    | 8    |      | N      |        | b1       | memory | 0       | 128, 64, 1       |
+|    o_U                           | fifo channel | stream    | 8    |      | N      |        | o        | memory | 0       | 128, 64, 1       |
++----------------------------------+--------------+-----------+------+------+--------+--------+----------+--------+---------+------------------+
+
+
+================================================================
+== Pragma Report
+================================================================
+* Ignored Pragmas
++--------+---------+---------------------------------------------------------+-----------------+
+| Type   | Options | Location                                                | Messages        |
++--------+---------+---------------------------------------------------------+-----------------+
+| UNROLL |         | in ops_calc (../t/model_c/hls_kernel/ops_engine.cpp:89) | Not implemented |
++--------+---------+---------------------------------------------------------+-----------------+
+
+* Implemented Pragmas
++-----------------+--------------------------------+--------------------------------------------------------------------------------------------------+
+| Type            | Options                        | Location                                                                                         |
++-----------------+--------------------------------+--------------------------------------------------------------------------------------------------+
+| LOOP_TRIPCOUNT  | max=1600 min=1600 avg=1600     | in (anonymous namespace)ops_read.2_pipeline_read (../t/model_c/hls_kernel/ops_engine.cpp:17)     |
+| LOOP_TRIPCOUNT  | max=1600 min=1600 avg=1600     | in (anonymous namespace)ops_layout_pipeline_pass (../t/model_c/hls_kernel/ops_engine.cpp:28)     |
+| LOOP_TRIPCOUNT  | max=320 min=320 avg=320        | in (anonymous namespace)ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:37)                   |
+| LOOP_TRIPCOUNT  | max=6 min=5 avg=5              | in (anonymous namespace)ops_layout.1_pipeline_gather (../t/model_c/hls_kernel/ops_engine.cpp:41) |
+| UNROLL          |                                | in (anonymous namespace)::ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:48)                 |
+| ARRAY_PARTITION | dim=1 type=complete variable=g | in (anonymous namespace)::ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:53)                 |
+| UNROLL          |                                | in (anonymous namespace)::ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:55)                 |
+| UNROLL          |                                | in (anonymous namespace)::ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:57)                 |
+| LOOP_TRIPCOUNT  | max=20 min=5 avg=12            | in (anonymous namespace)ops_layout.1_pipeline_emit (../t/model_c/hls_kernel/ops_engine.cpp:66)   |
+| LOOP_TRIPCOUNT  | max=1600 min=1600 avg=1600     | in (anonymous namespace)ops_calc_pipeline_calc (../t/model_c/hls_kernel/ops_engine.cpp:79)       |
+| LOOP_TRIPCOUNT  | max=1600 min=1600 avg=1600     | in (anonymous namespace)ops_write_pipeline_write (../t/model_c/hls_kernel/ops_engine.cpp:103)    |
+| DATAFLOW        |                                | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:111)                   |
+| STREAM          | variable=a0 type=fifo depth=64 | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:113)                   |
+| STREAM          | variable=a1 type=fifo depth=64 | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:114)                   |
+| STREAM          | variable=b0 type=fifo depth=64 | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:115)                   |
+| STREAM          | variable=b1 type=fifo depth=64 | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:116)                   |
+| STREAM          | variable=o type=fifo depth=64  | in (anonymous namespace)::ops_run (../t/model_c/hls_kernel/ops_engine.cpp:117)                   |
+| LOOP_TRIPCOUNT  | max=128 min=128 avg=128        | in y26_ops_top_pipeline_par (../t/model_c/hls_kernel/ops_engine.cpp:146)                         |
++-----------------+--------------------------------+--------------------------------------------------------------------------------------------------+
+
+* Valid Pragma Syntax
++-----------------+-----------------------------------------------------------------------------------------------------------+-------------------------------------------------------------+
+| Type            | Options                                                                                                   | Location                                                    |
++-----------------+-----------------------------------------------------------------------------------------------------------+-------------------------------------------------------------+
+| LOOP_TRIPCOUNT  | min=1600 max=1600                                                                                         | in ops_read (../t/model_c/hls_kernel/ops_engine.cpp:17)     |
+| PIPELINE        | ii=1                                                                                                      | in ops_read (../t/model_c/hls_kernel/ops_engine.cpp:18)     |
+| LOOP_TRIPCOUNT  | min=1600 max=1600                                                                                         | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:28)   |
+| PIPELINE        | ii=1                                                                                                      | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:29)   |
+| LOOP_TRIPCOUNT  | min=320 max=320                                                                                           | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:37)   |
+| LOOP_TRIPCOUNT  | min=5 max=6                                                                                               | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:41)   |
+| PIPELINE        | ii=1                                                                                                      | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:42)   |
+| UNROLL          |                                                                                                           | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:48)   |
+| ARRAY_PARTITION | variable=g complete                                                                                       | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:53)   |
+| UNROLL          |                                                                                                           | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:55)   |
+| UNROLL          |                                                                                                           | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:57)   |
+| LOOP_TRIPCOUNT  | min=5 max=20                                                                                              | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:66)   |
+| PIPELINE        | ii=1                                                                                                      | in ops_layout (../t/model_c/hls_kernel/ops_engine.cpp:67)   |
+| LOOP_TRIPCOUNT  | min=1600 max=1600                                                                                         | in ops_calc (../t/model_c/hls_kernel/ops_engine.cpp:79)     |
+| PIPELINE        | ii=1                                                                                                      | in ops_calc (../t/model_c/hls_kernel/ops_engine.cpp:80)     |
+| LOOP_TRIPCOUNT  | min=1600 max=1600                                                                                         | in ops_write (../t/model_c/hls_kernel/ops_engine.cpp:103)   |
+| PIPELINE        | ii=1                                                                                                      | in ops_write (../t/model_c/hls_kernel/ops_engine.cpp:104)   |
+| DATAFLOW        |                                                                                                           | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:111)     |
+| STREAM          | variable=a0 depth=64                                                                                      | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:113)     |
+| STREAM          | variable=a1 depth=64                                                                                      | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:114)     |
+| STREAM          | variable=b0 depth=64                                                                                      | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:115)     |
+| STREAM          | variable=b1 depth=64                                                                                      | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:116)     |
+| STREAM          | variable=o depth=64                                                                                       | in ops_run (../t/model_c/hls_kernel/ops_engine.cpp:117)     |
+| INTERFACE       | m_axi port=Sa offset=slave bundle=gmem_opa depth=4096 num_read_outstanding=16 max_read_burst_length=64    | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:129) |
+| INTERFACE       | m_axi port=Par offset=slave bundle=gmem_opa depth=1024 num_read_outstanding=16 max_read_burst_length=64   | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:130) |
+| INTERFACE       | m_axi port=Sb offset=slave bundle=gmem_opd depth=4096 num_read_outstanding=16 max_read_burst_length=64    | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:131) |
+| INTERFACE       | m_axi port=Dst offset=slave bundle=gmem_opd depth=4096 num_write_outstanding=16 max_write_burst_length=64 | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:132) |
+| INTERFACE       | s_axilite port=Sa bundle=control                                                                          | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:133) |
+| INTERFACE       | s_axilite port=Sb bundle=control                                                                          | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:134) |
+| INTERFACE       | s_axilite port=Dst bundle=control                                                                         | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:135) |
+| INTERFACE       | s_axilite port=Par bundle=control                                                                         | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:136) |
+| INTERFACE       | s_axilite port=C bundle=control                                                                           | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:137) |
+| INTERFACE       | s_axilite port=units bundle=control                                                                       | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:138) |
+| INTERFACE       | s_axilite port=amode bundle=control                                                                       | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:139) |
+| INTERFACE       | s_axilite port=bmode bundle=control                                                                       | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:140) |
+| INTERFACE       | s_axilite port=return bundle=control                                                                      | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:141) |
+| LOOP_TRIPCOUNT  | min=128 max=128                                                                                           | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:146) |
+| PIPELINE        | ii=1                                                                                                      | in y26_ops_top (../t/model_c/hls_kernel/ops_engine.cpp:147) |
++-----------------+-----------------------------------------------------------------------------------------------------------+-------------------------------------------------------------+
+
+

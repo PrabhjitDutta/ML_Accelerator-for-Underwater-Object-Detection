@@ -16,6 +16,13 @@ set coh [expr {$argc > 4 && [lindex $argv 4] eq "coh"}]
 # as `coh`. The host always syncs the attention buffers.
 set attn [expr {$argc > 5 && [lindex $argv 4] eq "attn"}]
 if {$attn} { lappend iprepo [lindex $argv 5] }
+# env Y26_OPS_IP = the ops block's IP repo (needs `attn`): adds y26_ops_top, control at 0x80030000 (the host's
+# OPS_REG_BASE), its two masters onto the attention block's S_AXI_HPC0_FPD SmartConnect with the same port settings.
+set ops [expr {[info exists ::env(Y26_OPS_IP)] && $::env(Y26_OPS_IP) ne ""}]
+if {$ops && !$attn} { puts "### !!! the ops block needs attn" ; exit 1 }
+if {$ops} { lappend iprepo $::env(Y26_OPS_IP) }
+# env Y26_TWO=1: a second kernel instance (control at 0x80020000) sharing the first one's PS ports.
+set two [expr {[info exists ::env(Y26_TWO)] && $::env(Y26_TWO) eq "1"}]
 
 puts "### BRINGUP phase=$phase clk=${fmhz}MHz out=$outdir"
 file mkdir $outdir
@@ -115,13 +122,65 @@ if {$attn} {
     auto "attention m_axi_gmem_attn -> PS S_AXI_HPC0_FPD"       -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto}         Master {/y26_attn_top_0/m_axi_gmem_attn} Slave {/zynq_ultra_ps_e_0/S_AXI_HPC0_FPD}         ddr_seg {Auto} intc_ip {New AXI SmartConnect} master_apm {0}]       [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HPC0_FPD]
 }
 
+if {$ops} {
+    create_bd_cell -type ip -vlnv xilinx.com:hls:y26_ops_top:1.0 y26_ops_top_0
+    set_property -dict [list CONFIG.C_M_AXI_GMEM_OPA_CACHE_VALUE {"1111"} CONFIG.C_M_AXI_GMEM_OPA_PROT_VALUE {"010"} \
+                             CONFIG.C_M_AXI_GMEM_OPD_CACHE_VALUE {"1111"} CONFIG.C_M_AXI_GMEM_OPD_PROT_VALUE {"010"}] [get_bd_cells y26_ops_top_0]
+    auto "PS M_AXI_HPM0_LPD -> ops s_axi_control" \
+      -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
+        Master {/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD} Slave {/y26_ops_top_0/s_axi_control} \
+        ddr_seg {Auto} intc_ip {Auto} master_apm {0}] \
+      [get_bd_intf_pins y26_ops_top_0/s_axi_control]
+    set net [get_bd_intf_nets -of_objects [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HPC0_FPD]]
+    set smc [get_bd_cells -of_objects [get_bd_intf_pins -of_objects $net -filter {MODE == Master}]]
+    set smc [lsearch -inline -not -exact $smc [get_bd_cells zynq_ultra_ps_e_0]]
+    puts "### connect: ops m_axi_gmem_opa, m_axi_gmem_opd -> $smc S01_AXI, S02_AXI -> PS S_AXI_HPC0_FPD"
+    set_property CONFIG.NUM_SI 3 $smc
+    connect_bd_intf_net [get_bd_intf_pins y26_ops_top_0/m_axi_gmem_opa] [get_bd_intf_pins $smc/S01_AXI]
+    connect_bd_intf_net [get_bd_intf_pins y26_ops_top_0/m_axi_gmem_opd] [get_bd_intf_pins $smc/S02_AXI]
+}
+
+if {$two} {
+    create_bd_cell -type ip -vlnv xilinx.com:hls:y26_conv_top:1.0 y26_conv_top_1
+    auto "PS M_AXI_HPM0_LPD -> kernel 1 s_axi_control" \
+      -rule xilinx.com:bd_rule:axi4 -config [list Clk_master {Auto} Clk_slave {Auto} Clk_xbar {Auto} \
+        Master {/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD} Slave {/y26_conv_top_1/s_axi_control} \
+        ddr_seg {Auto} intc_ip {Auto} master_apm {0}] \
+      [get_bd_intf_pins y26_conv_top_1/s_axi_control]
+    foreach {m hp} $ports {
+        set net [get_bd_intf_nets -of_objects [get_bd_intf_pins zynq_ultra_ps_e_0/$hp]]
+        set smc [get_bd_cells -of_objects [get_bd_intf_pins -of_objects $net -filter {MODE == Master}]]
+        set smc [lsearch -inline -not -exact $smc [get_bd_cells zynq_ultra_ps_e_0]]
+        puts "### connect: kernel 1 $m -> $smc S01_AXI -> PS $hp"
+        set_property CONFIG.NUM_SI 2 $smc
+        connect_bd_intf_net [get_bd_intf_pins y26_conv_top_1/$m] [get_bd_intf_pins $smc/S01_AXI]
+    }
+}
 assign_bd_address
+if {$two} {
+    set seg [get_bd_addr_segs -of_objects [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] -filter {NAME =~ *conv_top_1*}]
+    if {[llength $seg] != 1} { puts "### !!! kernel 1 control segments: $seg" ; exit 1 }
+    if {[get_property OFFSET $seg] != 0x80020000} { set_property offset 0x80020000 $seg }
+    foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_conv_top_1]] { puts "###   $s" }
+}
+if {$ops} {
+    set seg [get_bd_addr_segs -of_objects [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] -filter {NAME =~ *ops_top*}]
+    if {[llength $seg] != 1} { puts "### !!! ops control segments: $seg" ; exit 1 }
+    if {[get_property OFFSET $seg] != 0x80030000} { set_property offset 0x80030000 $seg }
+    foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_ops_top_0]] { puts "###   $s" }
+    foreach k {OPA_CACHE OPA_PROT OPD_CACHE OPD_PROT} { puts "### ops: $k = [get_property CONFIG.C_M_AXI_GMEM_${k}_VALUE [get_bd_cells y26_ops_top_0]]" }
+    foreach m {m_axi_gmem_opa m_axi_gmem_opd} {
+        if {[llength [get_bd_addr_segs -quiet -of_objects [get_bd_addr_spaces y26_ops_top_0/Data_$m]]] == 0} { puts "### !!! ops $m has no memory segment" ; exit 1 }
+    }
+}
 puts "### ---- address map ----"
 foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_conv_top_0]] { puts "###   $s" }
 foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_addr_spaces zynq_ultra_ps_e_0/Data]] {
     puts "###   PS: $s  offset [get_property OFFSET $s]  range [get_property RANGE $s]"
-    if {[string match *conv_top* $s] && [get_property OFFSET $s] != 0x80000000} { puts "### !!! kernel control moved" ; exit 1 }
+    if {[string match *conv_top_0* $s] && [get_property OFFSET $s] != 0x80000000} { puts "### !!! kernel control moved" ; exit 1 }
+    if {[string match *conv_top_1* $s] && [get_property OFFSET $s] != 0x80020000} { puts "### !!! kernel 1 control is not at 0x80020000" ; exit 1 }
     if {[string match *attn_top* $s] && [get_property OFFSET $s] != 0x80010000} { puts "### !!! attention control is not at 0x80010000" ; exit 1 }
+    if {[string match *ops_top* $s] && [get_property OFFSET $s] != 0x80030000} { puts "### !!! ops control is not at 0x80030000" ; exit 1 }
 }
 if {$attn} {
     foreach s [get_bd_addr_segs -quiet -of_objects [get_bd_cells y26_attn_top_0]] { puts "###   $s" }

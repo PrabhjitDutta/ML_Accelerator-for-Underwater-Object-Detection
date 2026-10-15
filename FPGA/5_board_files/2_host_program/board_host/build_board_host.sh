@@ -26,7 +26,7 @@ MODE="${1:-board}"
 case "$MODE" in
     # the one2many head is training-only; only the PC modes keep it for the o2m dumps
     board) OUT=y26_board;     EXTRA="-DY26_BOARD -DYOLO26_NO_O2M" ;;
-    sim)   OUT=y26_board_sim; EXTRA="-DY26_BOARD -DY26_BOARD_SIM" ;;
+    sim)   OUT=y26_board_sim; EXTRA="-DY26_BOARD -DY26_BOARD_SIM -DYOLO26_NO_O2M" ;;
     # packing test: float dequant, so SIM and CPU trunks must match byte for byte
     exact|exactcpu) SHIP="${SHIP/-DY26_FX_DEQUANT /}"; SHIP="${SHIP/-DY26_SILU_LUT /}"; OUT=y26_$MODE
            EXTRA="-DY26_BOARD -DY26_BOARD_SIM -DY26_HOST_EXACT"
@@ -45,7 +45,9 @@ case "$("$CXX" -dumpmachine)" in aarch64*) ARCH="-mcpu=cortex-a53";; x86_64*) AR
 if [ "${Y26_ATTN:-1}" = 1 ]; then EXTRA="$EXTRA -DY26_ATTN_INT"; else OUT="${OUT}_cpuattn"; fi
 HOSTSRC=(); [ "$MODE" = exactcpu ] || HOSTSRC=("$HERE/board_host.cpp")   # quoted: the path may hold spaces
 # the PC stand-ins run the attention block's C source; the board drives the IP
-[ "${Y26_ATTN:-1}" = 1 ] && [ "$MODE" != board ] && [ "$MODE" != exactcpu ] && HOSTSRC+=("$M/hls_kernel/attention_engine.cpp")
+[ "${Y26_ATTN:-1}" = 1 ] && [ "$MODE" != board ] && [ "$MODE" != exactcpu ] && HOSTSRC+=("$M/hls_kernel/attention_engine.cpp" "$M/hls_kernel/attention2_engine.cpp")
+# and the ops block's
+case "$SHIP" in *-DY26_YC*) [ "$MODE" != board ] && [ "$MODE" != exactcpu ] && HOSTSRC+=("$M/hls_kernel/ops_engine.cpp") ;; esac
 echo "[host] $CXX $MODE : $SHIP $EXTRA $ARCH"
 "$CXX" -O2 -ftree-vectorize $ARCH -ffp-contract=off -std=c++17 -fopenmp -pthread -Wno-unknown-pragmas -I"$VITIS_INC" $SHIP $EXTRA \
     "$M/reference_model/run_model.cpp" "$M/reference_model/yolo26_network.cpp" "$M/hls_kernel/conv_engine.cpp" "$M/hls_kernel/conv_engine_top.cpp" \

@@ -38,7 +38,8 @@ static inline Tensor cv(const Weights& W, const std::string& n, const Tensor& x)
 // An independent branch: its own thread when the board host runs async (PS work overlaps another branch's
 // kernel conv). Otherwise it runs at get().
 template <class F> static std::future<Tensor> fork(F f) {
-    return std::async(y26_async() ? std::launch::async : std::launch::deferred, std::move(f));
+    return std::async(y26_async() ? std::launch::async : std::launch::deferred,
+                      [f = std::move(f), fr = y26_frame()]() mutable { y26_frame() = fr; return f(); });
 }
 
 // Standard Bottleneck: cv2(cv1(x)), + residual when add. prefix e.g. "6.m.0.m.0".

@@ -35,14 +35,16 @@ Each folder has its own `README.md` with the details.
 |---|---|
 | FPGA clock | 250 MHz, timing met |
 | Hardware time per 640×640 image | **66.0 ms, about 15 images per second** (69.2 ms without the host's Img2Col rewrite of the first layer). Measured in simulation; counts the FPGA's convolutions only (its attention block adds 4.7 ms). The figure is from the previous kernel build; the current one adds 0.2 to 0.4% on the four layers that were simulated again. |
-| On the board, whole program | **191.7 ms per image, 5.22 images per second** (20 test images, one at a time); **8.4 images per second** with four images overlapped. This includes the ARM processor's share of the work. |
-| Chip resources used | 32% of logic (LUTs), 27% of block RAM, 43% of DSP blocks |
-| Correctness | On the board, the FPGA matches the C++ reference exactly on all 100 convolution layers and on both attention layers. |
-| Accuracy | mAP50 0.755 on the 800 URPC2018 validation images, measured on the board. |
+| On the board, whole program | **145.0 ms per image, 6.90 images per second** (20 test images, one at a time); **9.1 images per second** with four images overlapped. This includes the ARM processor's share of the work. |
+| Power on the board | 4.45 W one image at a time (0.71 J per image), 4.94 W with four overlapped (0.59 J per image); sum of the 18 on-board rail sensors |
+| Chip resources used | 37% of logic (LUTs), 28% of block RAM, 44% of DSP blocks |
+| Correctness | On the board, the FPGA matches the C++ reference exactly on all 100 convolution layers, on both attention layers and on every call of the ops block. |
+| Accuracy | mAP50 0.755 (0.7549) on the 800 URPC2018 validation images, from the board program run on a PC; on the 20 test images the board's detections are identical to the PC's. |
 
 **Status:** the design runs on the ZCU102. The FPGA computes every convolution and the core of the two attention
 layers; the ARM processor does the rest. Where one convolution feeds the next directly, the FPGA writes its
-result in the 8-bit form the next convolution reads, so the processor does not touch that data.
+result in the 8-bit form the next convolution reads, so the processor does not touch that data. A third FPGA
+block, the ops block, does the residual adds, the upsamples and the map copies on that 8-bit data.
 
 ## Quick start
 

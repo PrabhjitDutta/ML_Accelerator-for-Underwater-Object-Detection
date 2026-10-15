@@ -96,6 +96,7 @@ static int run(int argc, char** argv) {
             const auto t1 = clk::now();
             auto frame = [&, n, p, t0, t1](Tensor input) {
                 y26_board_weights(W);
+                y26_frame() = n;
                 const std::vector<Tensor> o = run_trunk(W, input, "");
                 const auto t2 = clk::now();
                 const auto dets = yolo26::decode_o2o(o[0].d.data(), o[1].d.data(), o[2].d.data(), o[0].C - 4, 300);
